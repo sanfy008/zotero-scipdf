@@ -18,42 +18,80 @@ export class Common {
 
   static registerRightClickMenuItem() {
     const menuIcon = `chrome://${config.addonRef}/content/icons/sci-hub-logo.svg`;
+
+    // Resolve the target items without ever throwing. `getActiveZoteroPane()`
+    // can be missing a pane in some window states, so guard every access.
+    const resolveItems = (contextItems?: Zotero.Item[]): Zotero.Item[] => {
+      if (contextItems && contextItems.length > 0) {
+        return contextItems;
+      }
+      try {
+        return Zotero.getActiveZoteroPane().getSelectedItems();
+      } catch (error) {
+        Zotero.debug(
+          `[Sci-PDF] failed to read selected items: ${String(error)}`,
+        );
+        return [];
+      }
+    };
+
     if (Zotero.MenuManager) {
       if (addon.data.registeredMenuIDs.includes(this.itemMenuID)) {
         return;
       }
-      const registeredMenuID = Zotero.MenuManager.registerMenu({
-        menuID: this.itemMenuID,
-        pluginID: config.addonID,
-        target: "main/library/item",
-        menus: [
-          {
-            menuType: "menuitem",
-            icon: menuIcon,
-            onShowing: (_event, context) => {
-              context.menuElem.setAttribute(
-                "label",
-                getString("menuitem-fetch"),
-              );
-              context.setIcon(menuIcon);
-              const items =
-                context.items ??
-                Zotero.getActiveZoteroPane().getSelectedItems();
-              context.setVisible(items.some((item) => item.isRegularItem()));
+      let registeredMenuID: string | false = false;
+      try {
+        registeredMenuID = Zotero.MenuManager.registerMenu({
+          menuID: this.itemMenuID,
+          pluginID: config.addonID,
+          target: "main/library/item",
+          menus: [
+            {
+              menuType: "menuitem",
+              icon: menuIcon,
+              // onShowing runs synchronously while Zotero builds the context
+              // menu popup. If it throws, the *whole* right-click menu fails to
+              // open, so this must never be allowed to raise.
+              onShowing: (_event, context) => {
+                try {
+                  context.menuElem.setAttribute(
+                    "label",
+                    getString("menuitem-fetch"),
+                  );
+                  context.setIcon(menuIcon);
+                  const items = resolveItems(context.items);
+                  context.setVisible(
+                    items.some((item) => item.isRegularItem()),
+                  );
+                } catch (error) {
+                  Zotero.debug(
+                    `[Sci-PDF] failed to prepare context menu: ${String(error)}`,
+                  );
+                  try {
+                    context.setVisible(false);
+                  } catch {
+                    // ignore: hiding is best-effort
+                  }
+                }
+              },
+              onCommand: (_event, context) => {
+                SciHubFetcher.updateItems(resolveItems(context.items), false);
+              },
             },
-            onCommand: (_event, context) => {
-              const items =
-                context.items ??
-                Zotero.getActiveZoteroPane().getSelectedItems();
-              SciHubFetcher.updateItems(items, false);
-            },
-          },
-        ],
-      });
+          ],
+        });
+      } catch (error) {
+        Zotero.debug(
+          `[Sci-PDF] MenuManager.registerMenu failed, using legacy menu: ${String(error)}`,
+        );
+        registeredMenuID = false;
+      }
       if (registeredMenuID) {
         addon.data.registeredMenuIDs.push(registeredMenuID);
+        return;
       }
-      return;
+      // Registration failed: fall through to the legacy menu so the command
+      // stays reachable instead of disappearing entirely.
     }
 
     ztoolkit.Menu.register("item", {
@@ -61,12 +99,11 @@ export class Common {
       id: "zotero-itemmenu-scihub-fetch",
       label: getString("menuitem-fetch"),
       isHidden: () => {
-        const items = Zotero.getActiveZoteroPane().getSelectedItems();
+        const items = resolveItems();
         return !items.some((item) => item.isRegularItem());
       },
       commandListener: () => {
-        const zoteroPane = Zotero.getActiveZoteroPane();
-        SciHubFetcher.updateItems(zoteroPane.getSelectedItems(), false);
+        SciHubFetcher.updateItems(resolveItems(), false);
       },
       icon: menuIcon,
     });

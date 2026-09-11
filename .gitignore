@@ -15,3 +15,6 @@ tsconfig.tsbuildinfo
 .scaffold
 build
 logs
+
+# Build output
+*.xpi
