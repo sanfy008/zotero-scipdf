@@ -1,5 +1,6 @@
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
+import { DOIManager } from "./DOIManager";
 import { SciHubFetcher } from "./SciHubFetcher";
 
 export class Common {
@@ -78,6 +79,35 @@ export class Common {
                 SciHubFetcher.updateItems(resolveItems(context.items), false);
               },
             },
+            {
+              menuType: "menuitem",
+              icon: menuIcon,
+              onShowing: (_event, context) => {
+                try {
+                  context.menuElem.setAttribute(
+                    "label",
+                    getString("menuitem-verifydoi"),
+                  );
+                  context.setIcon(menuIcon);
+                  const items = resolveItems(context.items);
+                  context.setVisible(
+                    items.some((item) => item.isRegularItem()),
+                  );
+                } catch (error) {
+                  Zotero.debug(
+                    `[Sci-PDF] failed to prepare verify-doi context menu: ${String(error)}`,
+                  );
+                  try {
+                    context.setVisible(false);
+                  } catch {
+                    // ignore: hiding is best-effort
+                  }
+                }
+              },
+              onCommand: (_event, context) => {
+                DOIManager.auditAndRepairItems(resolveItems(context.items));
+              },
+            },
           ],
         });
       } catch (error) {
@@ -104,6 +134,20 @@ export class Common {
       },
       commandListener: () => {
         SciHubFetcher.updateItems(resolveItems(), false);
+      },
+      icon: menuIcon,
+    });
+
+    ztoolkit.Menu.register("item", {
+      tag: "menuitem",
+      id: "zotero-itemmenu-doi-verify",
+      label: getString("menuitem-verifydoi"),
+      isHidden: () => {
+        const items = resolveItems();
+        return !items.some((item) => item.isRegularItem());
+      },
+      commandListener: () => {
+        DOIManager.auditAndRepairItems(resolveItems());
       },
       icon: menuIcon,
     });

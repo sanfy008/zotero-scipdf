@@ -3,9 +3,14 @@ export const doiRegexps: RegExp[] = [
   /\b(10\.\d{4,9}\/[-._;()/:a-z0-9]+)(?=$|[\s"<>?#])/gi,
 ];
 
-function cleanDOI(doi: string): string {
-  // Strip trailing punctuation like .,;:()[] that might be captured at boundary
-  return doi.replace(/[.,;:()[\]]+$/, "").trim();
+export function cleanDOI(doi: string): string {
+  if (!doi) return "";
+  // Strip URL prefixes, doi: schemes, and trailing punctuation
+  return doi
+    .trim()
+    .replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i, "")
+    .replace(/[.,;:()[\]]+$/, "")
+    .trim();
 }
 
 export function matchDOIs(text: string): string[] {
