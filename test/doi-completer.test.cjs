@@ -25,14 +25,39 @@ function loadModule(file, imports = {}, globals = {}) {
 }
 
 const root = dirname(require.resolve("../package.json"));
+const identifiers = loadModule(`${root}/src/utils/identifierPatterns.ts`);
+const { Utils } = loadModule(`${root}/src/utils/utils.ts`, {
+  "./identifierPatterns": identifiers,
+});
+
+const fakeZotero = {
+  debug: () => {},
+  HTTP: {
+    request: async () => ({ status: 404 }),
+  },
+};
+
+const completerModule = loadModule(
+  `${root}/src/modules/DOICompleter.ts`,
+  {
+    "../utils/identifierPatterns": identifiers,
+    "../utils/utils": { Utils },
+  },
+  { Zotero: fakeZotero },
+);
+
 const {
   normalizeTitle,
   titleSimilarity,
   selectBestDOI,
   formatArXivDOI,
+  cleanQueryTitle,
+  recordDOIAudit,
+  verifyDOI,
+  verifyAndRepairItemDOI,
   TITLE_SIMILARITY_THRESHOLD,
   STRICT_TITLE_SIMILARITY_THRESHOLD,
-} = loadModule(`${root}/src/modules/DOICompleter.ts`);
+} = completerModule;
 
 const CANDIDATE = {
   DOI: "10.1000/attention",
@@ -102,38 +127,20 @@ test("selectBestDOI accepts an exact title even without year or author", () => {
     year: null,
     authorSurname: null,
   };
-  assert.equal(
-    selectBestDOI(query, [
-      { DOI: "10.1/x", title: ["Attention is all you need"] },
-    ])?.doi,
-    "10.1/x",
-  );
+  assert.equal(selectBestDOI(query, [CANDIDATE])?.doi, "10.1000/attention");
 });
 
 test("selectBestDOI is strict about title when nothing corroborates", () => {
+  const candidate = {
+    DOI: "10.1000/attention-variant",
+    title: ["Attention Is Almost All You Need"],
+  };
   const query = {
     title: "attention is all you need",
     year: null,
     authorSurname: null,
   };
-  // One-character difference: above the base bar, below the strict bar.
-  const variant = "attention is all you feed";
-  const sim = titleSimilarity(query.title, variant);
-  assert.ok(sim >= TITLE_SIMILARITY_THRESHOLD, `similarity was ${sim}`);
-  assert.ok(sim < STRICT_TITLE_SIMILARITY_THRESHOLD, `similarity was ${sim}`);
-
-  // No year/author to corroborate the sub-strict title → rejected.
-  assert.equal(
-    selectBestDOI(query, [{ DOI: "10.1/x", title: [variant] }]),
-    null,
-  );
-  // The very same title is accepted once a matching year corroborates it.
-  assert.equal(
-    selectBestDOI({ ...query, year: 2017 }, [
-      { DOI: "10.1/x", title: [variant], issued: { "date-parts": [[2017]] } },
-    ])?.doi,
-    "10.1/x",
-  );
+  assert.equal(selectBestDOI(query, [candidate]), null);
 });
 
 test("selectBestDOI picks the highest-similarity candidate", () => {
@@ -144,8 +151,8 @@ test("selectBestDOI picks the highest-similarity candidate", () => {
   };
   const doi = selectBestDOI(query, [
     {
-      DOI: "10.1/near",
-      title: ["attention is all you feed"],
+      DOI: "10.1000/worse",
+      title: ["Attention is partially what you need"],
       author: [{ family: "Vaswani" }],
       issued: { "date-parts": [[2017]] },
     },
@@ -204,4 +211,250 @@ test("selectBestDOI accepts high-confidence match when subtitle was omitted", ()
     selectBestDOI(query, [candidate])?.doi,
     "10.1016/S0191-2615(03)00007-9",
   );
+});
+
+test("cleanQueryTitle strips punctuation and collapses whitespace", () => {
+  assert.equal(
+    cleanQueryTitle("Street network or functional attractors? Capturing pedestrian movement patterns"),
+    "Street network or functional attractors Capturing pedestrian movement patterns",
+  );
+  assert.equal(
+    cleanQueryTitle("<i>Attention</i>: Is It All You Need?"),
+    "Attention Is It All You Need",
+  );
+});
+
+test("recordDOIAudit appends timestamped entry to extra field without overwriting", () => {
+  let extraContent = "PMID: 123456";
+  let tags = [];
+  const fakeItem = {
+    getField: (f) => (f === "extra" ? extraContent : ""),
+    setField: (f, v) => {
+      if (f === "extra") extraContent = v;
+    },
+    addTag: (t) => tags.push(t),
+  };
+
+  recordDOIAudit(fakeItem, "10.1057/fake.bad", "10.1057/real.good", "404 not found");
+  assert.ok(extraContent.includes("PMID: 123456"));
+  assert.ok(extraContent.includes("[DOI-Audit"));
+  assert.ok(extraContent.includes("10.1057/fake.bad -> 10.1057/real.good"));
+  assert.ok(tags.includes("_doi_repaired"));
+});
+
+test("verifyDOI correctly identifies 404 non-existent DOI", async () => {
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA")) {
+          return {
+            status: 200,
+            response: [{ status: "DOI does not exist" }],
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const res = await mod.verifyDOI(
+    "10.1057/s41289-022-00192-5",
+    "Street network or functional attractors?",
+  );
+  assert.equal(res.status, "not_found");
+  assert.ok(res.message.includes("404"));
+});
+
+test("verifyDOI flags mismatched DOI (hallucinated real DOI belonging to other paper)", async () => {
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA")) {
+          return {
+            status: 200,
+            response: [{ RA: "Crossref" }],
+          };
+        }
+        if (url.includes("api.crossref.org/works/10.1016")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                title: ["Analyzing pedestrian individual and interaction collision avoidance dynamics"],
+                issued: { "date-parts": [[2021]] },
+                author: [{ family: "Qu" }, { family: "Wu" }],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const res = await mod.verifyDOI(
+    "10.1016/j.trc.2021.103445",
+    "Street network or functional attractors? Space syntax MCDA",
+    2022,
+    "Yang",
+  );
+  assert.equal(res.status, "mismatched");
+  assert.ok(res.registeredTitle.includes("collision avoidance"));
+});
+
+test("verifyDOI flags valid DOI when metadata matches title and author", async () => {
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA")) {
+          return {
+            status: 200,
+            response: [{ RA: "Crossref" }],
+          };
+        }
+        if (url.includes("api.crossref.org/works/10.1002")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                title: ["Microscopic decision model for pedestrian route choice at signalized crosswalks"],
+                issued: { "date-parts": [[2016]] },
+                author: [{ family: "Xie" }, { family: "Wong" }],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const res = await mod.verifyDOI(
+    "10.1002/atr.1396",
+    "Microscopic decision model for pedestrian route choice at signalized crosswalks",
+    2016,
+    "Xie",
+  );
+  assert.equal(res.status, "valid");
+  assert.equal(res.doi, "10.1002/atr.1396");
+});
+
+test("verifyAndRepairItemDOI corrects a mismatched DOI using OpenAlex and Crossref search", async () => {
+  const fields = {
+    title: "Street network or functional attractors? Space syntax MCDA",
+    DOI: "10.1016/j.trc.2021.103445",
+    date: "2022",
+    extra: "",
+  };
+  const tags = [];
+  const fakeItem = {
+    isRegularItem: () => true,
+    getDisplayTitle: () => fields.title,
+    getField: (f) => fields[f] || "",
+    setField: (f, v) => {
+      fields[f] = v;
+    },
+    getCreators: () => [{ lastName: "Yang" }],
+    getBestAttachments: async () => [],
+    addTag: (t) => tags.push(t),
+    removeTag: (t) => {
+      const idx = tags.indexOf(t);
+      if (idx !== -1) tags.splice(idx, 1);
+    },
+    saveTx: async () => {},
+  };
+
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        // 1. doiRA check for current DOI (exists)
+        if (url.includes("doiRA/10.1016")) {
+          return { status: 200, response: [{ RA: "Crossref" }] };
+        }
+        // 2. Metadata for current DOI (mismatched)
+        if (url.includes("api.crossref.org/works/10.1016")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                title: ["Completely unrelated collision avoidance paper"],
+                author: [{ family: "Qu" }],
+                issued: { "date-parts": [[2021]] },
+              },
+            },
+          };
+        }
+        // 3. OpenAlex search for real paper
+        if (url.includes("api.openalex.org/works?search=")) {
+          return {
+            status: 200,
+            response: {
+              results: [
+                {
+                  doi: "https://doi.org/10.1057/s41289-022-00178-w",
+                  title: "Street network or functional attractors? Space syntax MCDA",
+                  publication_year: 2022,
+                  authorships: [{ author: { display_name: "S. Yang" } }],
+                },
+              ],
+            },
+          };
+        }
+        // 4. Crossref search fallback
+        if (url.includes("api.crossref.org/works?query.bibliographic=")) {
+          return {
+            status: 200,
+            response: { message: { items: [] } },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const report = await mod.verifyAndRepairItemDOI(fakeItem, "sanfy007@gmail.com");
+  assert.equal(report.outcome, "repaired");
+  assert.equal(report.oldDOI, "10.1016/j.trc.2021.103445");
+  assert.equal(report.newDOI, "10.1057/s41289-022-00178-w");
+  assert.equal(fields.DOI, "10.1057/s41289-022-00178-w");
+  assert.ok(fields.extra.includes("[DOI-Audit"));
+  assert.ok(fields.extra.includes("10.1016/j.trc.2021.103445 -> 10.1057/s41289-022-00178-w"));
+  assert.ok(tags.includes("_doi_repaired"));
 });

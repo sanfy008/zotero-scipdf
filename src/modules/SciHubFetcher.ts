@@ -2,7 +2,7 @@ import { getString } from "../utils/locale";
 import { getPref } from "../utils/prefs";
 import { Utils } from "../utils/utils";
 import { CustomResolverManager } from "./CustomResolverManager";
-import { doiExists, findDOI, formatArXivDOI } from "./DOICompleter";
+import { verifyAndRepairItemDOI } from "./DOICompleter";
 import {
   OAResolver,
   extractPdfUrlFromHtml,
@@ -188,68 +188,24 @@ export class SciHubFetcher {
       return;
     }
     try {
-      const existing = await Utils.extractDOIs(item);
-      const arxivIds = await Utils.extractArXivIDs(item);
-
-      if (existing.length === 0) {
-        // If item has no DOI, but has an arXiv ID, assign standard DataCite DOI
-        if (arxivIds.length > 0) {
-          const arxivDOI = formatArXivDOI(arxivIds[0]);
-          item.setField("DOI", arxivDOI);
-          await item.saveTx();
-          Utils.showPopWin(
-            getString("popwin-doicompleted"),
-            `${item.getDisplayTitle()} → ${arxivDOI}`,
-            "success",
-          );
-          return;
-        }
-
-        const match = await findDOI(item, email);
-        if (!match) return;
-        item.setField("DOI", match.doi);
-        await item.saveTx();
+      const report = await verifyAndRepairItemDOI(item, email);
+      if (report.outcome === "completed") {
         Utils.showPopWin(
           getString("popwin-doicompleted"),
-          `${item.getDisplayTitle()} → ${match.doi}`,
+          `${item.getDisplayTitle()} → ${report.newDOI}`,
           "success",
         );
-        return;
-      }
-
-      // A DOI is present — make sure it actually resolves. Only correct it when
-      // the registry is certain it does not exist (false), never on an
-      // undetermined lookup (null), so we don't clobber valid DOIs on a hiccup.
-      const primary = existing[0];
-      if ((await doiExists(primary)) !== false) {
-        return;
-      }
-
-      // Existing DOI does not exist anywhere globally (false).
-      // If item has an arXiv ID, prioritize standard DataCite DOI:
-      if (arxivIds.length > 0) {
-        const arxivDOI = formatArXivDOI(arxivIds[0]);
-        item.setField("DOI", arxivDOI);
-        await item.saveTx();
+      } else if (report.outcome === "repaired") {
+        const title =
+          report.detail === "mismatched"
+            ? getString("popwin-doimismatched")
+            : getString("popwin-doifixed");
         Utils.showPopWin(
-          getString("popwin-doifixed"),
-          `${primary} → ${arxivDOI}`,
+          title,
+          `${report.oldDOI || item.getDisplayTitle()} → ${report.newDOI}`,
           "success",
         );
-        return;
       }
-
-      const match = await findDOI(item, email);
-      if (!match || match.doi.toLowerCase() === primary.toLowerCase()) {
-        return;
-      }
-      item.setField("DOI", match.doi);
-      await item.saveTx();
-      Utils.showPopWin(
-        getString("popwin-doifixed"),
-        `${primary} → ${match.doi}`,
-        "success",
-      );
     } catch (error) {
       Zotero.debug(`[Sci-PDF] failed to ensure valid DOI: ${String(error)}`);
     }
