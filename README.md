@@ -7,9 +7,16 @@ English | [简体中文](doc/README-zhCN.md)
 
 
 # Introduction
-This is a Sci-Hub plugin designed for Zotero 7 and Zotero 8.  
-This plugin utilizes Zotero's built-in [PDF resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers) feature.  
-It automatically writes Sci-Hub's resolver into the `extensions.zotero.findPDFs.resolvers` field and enabling automatic PDF downloads from Sci-Hub within Zotero.
+This plugin helps Zotero find and download full-text PDFs from multiple sources.
+It utilizes Zotero's built-in [PDF resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers) feature, writing resolvers into the `extensions.zotero.findPDFs.resolvers` field so that Zotero's **Find Available PDF** (and automatic download of newly added items) can fetch PDFs.
+
+Two sources are configured out of the box:
+- **OpenAlex** (enabled by default) — a legal, open-access source. It aggregates OA copies from publishers and repositories and often finds full text (including recent papers) that Sci-Hub does not have. When there is no direct PDF link, it hands Zotero the article's landing page so Zotero's translators can reach the PDF.
+- **Sci-Hub** — a fallback for older paywalled papers. Ships with the reliably-reachable mirrors (`sci-hub.se`, `sci-hub.st`, `sci-hub.ru`).
+
+OpenAlex is tried before Sci-Hub. Both can be toggled and configured in the plugin's preferences; you may optionally set a contact email for OpenAlex (recommended, for the API's "polite pool").
+
+**Missing-DOI completion** (enabled by default): when you fetch manually via the right-click menu, an item that has no DOI is looked up on Crossref by its title (corroborated by first author and year). On a confident match the DOI is filled in and the fetch proceeds normally. This runs only on the explicit right-click action — never during background auto-download — and can be turned off in preferences.
 
 > [Detail code in Zotero](https://github.com/zotero/zotero/blob/5536f8d2bd08ddac9074b9df05b7d205273835e7/chrome/content/zotero/xpcom/attachments.js#L1350)  
 > [Custom PDF resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers)  
@@ -25,5 +32,5 @@ Download and install the [latest release xpi file](https://github.com/syt2/zoter
 Upon first installation, the plugin will come pre-configured with some common Sci-Hub sites. If you need to add other Sci-Hub sites or remove existing ones, you can edit them in the plugin's settings. Different sites can be separated by commas `,`.
 
 # FAQs
-- Items missing a `DOI` do not have the "Find Full Text" option and cannot be downloaded via Sci-Hub.
-- Items that already have associated attachments do not have the `Find Full Text` option.
+- Both OpenAlex and Sci-Hub resolvers require a `DOI`: Zotero only runs custom PDF resolvers for items that have a DOI. Items without a DOI can still be tried via Zotero's own resolvers (item URL / Zotero's OA index), but not via these resolvers. When you fetch manually, the missing-DOI completion above can fill in a DOI first so these resolvers become usable.
+- Items that already have associated attachments do not show the `Find Full Text` option; use the plugin's right-click menu to force a fetch.

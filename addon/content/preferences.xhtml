@@ -2,21 +2,77 @@
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
 <!-- Inline handlers run in the window, not the preference script sandbox. -->
-<vbox id="zotero-prefpane-__addonRef__" onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
+<vbox
+  id="zotero-prefpane-__addonRef__"
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
+>
   <groupbox>
     <label>
       <html:h2 data-l10n-id="pref-title"></html:h2>
     </label>
 
-    <checkbox id="zotero-prefpane-__addonRef__-autoDownload" data-l10n-id="pref-autoDownload" />
+    <checkbox
+      id="zotero-prefpane-__addonRef__-autoDownload"
+      data-l10n-id="pref-autoDownload"
+    />
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-openAlex"
+      data-l10n-id="pref-openalex"
+    />
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-unpaywall"
+      data-l10n-id="pref-unpaywall"
+    />
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-semanticScholar"
+      data-l10n-id="pref-semanticscholar"
+    />
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-arxiv"
+      data-l10n-id="pref-arxiv"
+    />
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-completeDOI"
+      data-l10n-id="pref-completedoi"
+    />
 
     <hbox>
-      <html:label for="zotero-prefpane-__addonRef__-scihubUrl" data-l10n-id="pref-scihub-input"></html:label>
-      <html:input type="text" id="zotero-prefpane-__addonRef__-scihubUrl"></html:input>
+      <html:label
+        for="zotero-prefpane-__addonRef__-email"
+        data-l10n-id="pref-email-input"
+      ></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-email"
+      ></html:input>
+    </hbox>
+
+    <checkbox
+      id="zotero-prefpane-__addonRef__-scihubEnabled"
+      data-l10n-id="pref-scihub-enabled"
+    />
+
+    <hbox>
+      <html:label
+        for="zotero-prefpane-__addonRef__-scihubUrl"
+        data-l10n-id="pref-scihub-input"
+      ></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-scihubUrl"
+      ></html:input>
     </hbox>
   </groupbox>
 </vbox>
 <vbox>
-  <html:label data-l10n-id="pref-help" data-l10n-args='{"name": "__addonName__","version":"__buildVersion__"}'>
+  <html:label
+    data-l10n-id="pref-help"
+    data-l10n-args='{"name": "__addonName__","version":"__buildVersion__"}'
+  >
   </html:label>
 </vbox>

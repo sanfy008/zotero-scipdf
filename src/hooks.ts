@@ -2,7 +2,12 @@ import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
 import { createZToolkit } from "./utils/ztoolkit";
 import { getPref, setPref } from "./utils/prefs";
-import { sciHubCustomResolver, presetSciHubCustomResolvers } from "./modules/CustomResolver";
+import {
+  sciHubCustomResolver,
+  presetSciHubCustomResolvers,
+  openAlexCustomResolver,
+} from "./modules/CustomResolver";
+import type { CustomResolver } from "./modules/CustomResolver";
 import { CustomResolverManager } from "./modules/CustomResolverManager";
 import { Common } from "./modules/Common";
 
@@ -15,20 +20,22 @@ async function onStartup() {
 
   initLocale();
 
-
   if (!getPref("firstInstall")) {
     setPref("firstInstall", true);
+    const email = getPref("email") || "";
     const url = Zotero.Prefs.get("zoteroscihub.scihub_url");
     let autoDownload = false;
     if (Zotero.Prefs.get("zoteroscihub.automatic_pdf_download")) {
       autoDownload = true;
     }
-    if (url && typeof url === 'string') {
-      const resolver = sciHubCustomResolver(url, autoDownload);
-      CustomResolverManager.shared.appendCustomResolversInZotero([resolver]);
+    // Legal OA (OpenAlex) is offered first, then Sci-Hub as a fallback.
+    const resolvers: CustomResolver[] = [openAlexCustomResolver(email, true)];
+    if (url && typeof url === "string") {
+      resolvers.push(sciHubCustomResolver(url, autoDownload));
     } else {
-      CustomResolverManager.shared.appendCustomResolversInZotero(presetSciHubCustomResolvers(true));
+      resolvers.push(...presetSciHubCustomResolvers(true));
     }
+    CustomResolverManager.shared.appendCustomResolversInZotero(resolvers);
   } else {
     // Restore saved choices without re-adding defaults or enabling downloads.
     CustomResolverManager.shared.appendCustomResolversInZotero(
@@ -68,7 +75,6 @@ function onShutdown(): void {
   // @ts-expect-error - Plugin instance is not typed
   delete Zotero[addon.data.config.addonInstance];
 }
-
 
 /**
  * This function is just an example of dispatcher for Preference UI events.

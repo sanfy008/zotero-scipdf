@@ -1,4 +1,4 @@
-import { matchDOIs } from "./identifierPatterns";
+import { matchDOIs, matchArXivIDs } from "./identifierPatterns";
 
 export class Utils {
   static async extractDOIs(item: Zotero.Item): Promise<string[]> {
@@ -32,6 +32,40 @@ export class Utils {
       extractFromItem(attachment);
     }
     return dois;
+  }
+
+  static async extractArXivIDs(item: Zotero.Item): Promise<string[]> {
+    const arxivIds: string[] = [];
+    const extract = (text: string) => {
+      for (const id of matchArXivIDs(text)) {
+        if (!arxivIds.some((v) => v.toLowerCase() === id.toLowerCase())) {
+          arxivIds.push(id);
+        }
+      }
+    };
+
+    const extractFromItem = (it: Zotero.Item) => {
+      for (const field of ["DOI", "url", "title", "extra", "publicationTitle"] as const) {
+        try {
+          const value = it.getField(field as any);
+          if (value && typeof value === "string") {
+            extract(value);
+          }
+        } catch {
+          // ignore fields not present on some item types
+        }
+      }
+    };
+
+    extractFromItem(item);
+    try {
+      for (const attachment of await item.getBestAttachments()) {
+        extractFromItem(attachment);
+      }
+    } catch {
+      // ignore
+    }
+    return arxivIds;
   }
 
   static async attachRemotePDF(pdfURL: URL, item: Zotero.Item) {

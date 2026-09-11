@@ -61,6 +61,7 @@ function harness(request) {
   const ui = {
     ...Utils,
     extractDOIs: Utils.extractDOIs,
+    extractArXivIDs: Utils.extractArXivIDs,
     attachRemotePDF: async (url) => imports.push(url.href),
     showPopWin: (title, text, type, closeTime) => {
       const w = {
@@ -90,12 +91,22 @@ function harness(request) {
           options ? JSON.stringify(options.args) : key,
       },
       "../utils/utils": { Utils: ui },
+      "../utils/prefs": { getPref: (key) => key === "scihubEnabled" },
+      "./DOICompleter": {
+        findDOI: async () => null,
+        doiExists: async () => true,
+        formatArXivDOI: (id) => `10.48550/arXiv.${id}`,
+      },
+      "./OAResolver": {
+        OAResolver: { resolve: async () => [] },
+        extractPdfUrlFromHtml: () => null,
+      },
       "./CustomResolverManager": {
         CustomResolverManager: {
           shared: {
             customResolvers: [
-              { url: "https://a.example/{doi}" },
-              { url: "https://b.example/{doi}" },
+              { name: "Sci-Hub", url: "https://a.example/{doi}" },
+              { name: "Sci-Hub", url: "https://b.example/{doi}" },
             ],
           },
         },

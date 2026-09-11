@@ -8,6 +8,13 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "firstInstall": boolean;
+      "email": string;
+      "completeDOI": boolean;
+      "openAlex": boolean;
+      "unpaywall": boolean;
+      "semanticScholar": boolean;
+      "arxiv": boolean;
+      "scihubEnabled": boolean;
     };
   }
 }

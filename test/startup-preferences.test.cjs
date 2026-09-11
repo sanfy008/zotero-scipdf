@@ -77,7 +77,12 @@ test("restart preserves an intentionally empty resolver list", async () => {
 test("first installation still initializes the preset resolvers", async () => {
   assert.deepEqual(
     await start({ installed: false }),
-    JSON.parse(JSON.stringify(resolvers.presetSciHubCustomResolvers(true))),
+    JSON.parse(
+      JSON.stringify([
+        resolvers.openAlexCustomResolver("", true),
+        ...resolvers.presetSciHubCustomResolvers(true),
+      ]),
+    ),
   );
 });
 
@@ -87,12 +92,11 @@ test("first installation still migrates the legacy URL and disabled setting", as
       installed: false,
       legacy: { "zoteroscihub.scihub_url": "https://example.net" },
     }),
-    [
-      JSON.parse(
-        JSON.stringify(
-          resolvers.sciHubCustomResolver("https://example.net", false),
-        ),
-      ),
-    ],
+    JSON.parse(
+      JSON.stringify([
+        resolvers.openAlexCustomResolver("", true),
+        resolvers.sciHubCustomResolver("https://example.net", false),
+      ]),
+    ),
   );
 });
