@@ -27,3 +27,4 @@ popwin-enriching = 正在補齊詮釋資料與摘要
 popwin-enriched = 已補齊文獻資訊
 popwin-enrichsummary = 詮釋資料補齊完成：共 { $total } 篇，補齊 { $enriched } 篇（含摘要 { $abstracts } 篇），已完整 { $complete } 篇，未解決 { $failed } 篇
 popwin-fallback-enriched = 未獲取到PDF，已自動補齊詮釋資料與摘要
+popwin-reusedlocal = 已重用庫中現有 PDF（依據 { $evidence }，來自《{ $source }》）

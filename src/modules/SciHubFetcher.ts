@@ -9,6 +9,7 @@ import {
 } from "./DOICompleter";
 import { enrichSingleItem } from "./MetadataEnricher";
 import { runExclusive } from "./OperationGate";
+import { LocalPDFIndex } from "./LocalPDFIndex";
 import {
   OAResolver,
   extractPdfUrlFromHtml,
@@ -79,10 +80,28 @@ export class SciHubFetcher {
     const throttledHosts = new Set<string>();
     const email = resolveEmail((getPref("email") as string) || "");
 
+    // One pass over the library, then every item is matched locally. Building
+    // this up front costs one scan per batch, not one per item.
+    let localIndex: LocalPDFIndex | undefined;
+    if (getPref("reuseLocalPDF") !== false && filtered.length > 0) {
+      try {
+        localIndex = await LocalPDFIndex.build(filtered[0].libraryID);
+      } catch (error) {
+        Zotero.debug(`[Sci-PDF] local PDF index failed: ${String(error)}`);
+      }
+    }
+
     for (const [itemIndex, item] of filtered.entries()) {
       if (state.cancelled) break;
 
       const doiReport = await this.ensureValidDOI(item, email);
+
+      // Reuse a PDF that is already in the library instead of downloading and
+      // storing a second copy of the same file.
+      if (localIndex && (await this.reuseLocalPDF(item, localIndex, state))) {
+        continue;
+      }
+
       const dois = await Utils.extractDOIs(item);
       const arxivIds = await Utils.extractArXivIDs(item);
       if (!dois.length && !arxivIds.length) {
@@ -201,6 +220,34 @@ export class SciHubFetcher {
         }
       }
     }
+  }
+
+  /**
+   * Attaches an existing library PDF to `item` as a linked file. Returns true
+   * when the item now has a PDF and the caller should skip the download.
+   */
+  private static async reuseLocalPDF(
+    item: Zotero.Item,
+    index: LocalPDFIndex,
+    state: FetchState,
+  ): Promise<boolean> {
+    if (state.cancelled) return false;
+    const match = index.find(item);
+    if (!match?.filePath) return false;
+    const linked = await Utils.linkExistingPDF(item, match.filePath);
+    if (!linked) return false;
+    Utils.showPopWin(
+      getString("popwin-reusedlocal", {
+        args: {
+          source: match.parent.getField("title") || "",
+          evidence: match.evidence,
+        },
+      }),
+      item.getDisplayTitle(),
+      "success",
+      5000,
+    );
+    return true;
   }
 
   private static anyOASourceEnabled(): boolean {

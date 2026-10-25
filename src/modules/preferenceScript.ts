@@ -27,6 +27,7 @@ export async function registerPrefsScripts(_window: Window) {
   const completeDOICheckbox = byId<XUL.Checkbox>("completeDOI");
   const autoEnrichMetadataCheckbox = byId<XUL.Checkbox>("autoEnrichMetadata");
   const scihubEnabledCheckbox = byId<XUL.Checkbox>("scihubEnabled");
+  const reuseLocalPDFCheckbox = byId<XUL.Checkbox>("reuseLocalPDF");
   const emailInput = byId<HTMLInputElement>("email");
   const urlInput = byId<HTMLInputElement>("scihubUrl");
 
@@ -44,6 +45,8 @@ export async function registerPrefsScripts(_window: Window) {
   arxivCheckbox.checked = getPref("arxiv") !== false;
   // Sci-Hub fallback is opt-in: off unless the user turned it on.
   scihubEnabledCheckbox.checked = getPref("scihubEnabled") === true;
+  // Reusing a library PDF is opt-out: enabled unless the user turned it off.
+  reuseLocalPDFCheckbox.checked = getPref("reuseLocalPDF") !== false;
   // Missing-DOI completion is opt-out: enabled unless the user turned it off.
   completeDOICheckbox.checked = getPref("completeDOI") !== false;
   // Fallback metadata enrichment is opt-out: enabled unless the user turned it off.
@@ -96,6 +99,9 @@ export async function registerPrefsScripts(_window: Window) {
   });
   scihubEnabledCheckbox.addEventListener("command", () => {
     setPref("scihubEnabled", scihubEnabledCheckbox.checked);
+  });
+  reuseLocalPDFCheckbox.addEventListener("command", () => {
+    setPref("reuseLocalPDF", reuseLocalPDFCheckbox.checked);
   });
   completeDOICheckbox.addEventListener("command", () => {
     setPref("completeDOI", completeDOICheckbox.checked);

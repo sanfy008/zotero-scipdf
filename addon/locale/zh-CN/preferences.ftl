@@ -17,4 +17,6 @@ pref-autoenrichmetadata =
     .label = PDF获取失败时自动补齐元数据与摘要（通过 OpenAlex/Crossref）
 pref-email-input = 联系邮箱（可选，用于 OpenAlex）:
 pref-scihub-input = Sci-Hub 站点:
+pref-reuselocalpdf =
+    .label = 复用库中已下载的 PDF（链接现有文件，不重复下载与存放）
 pref-help = { $name } Build { $version }

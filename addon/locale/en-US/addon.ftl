@@ -27,3 +27,4 @@ popwin-enriching = Fetching Metadata & Abstract
 popwin-enriched = Enriched metadata
 popwin-enrichsummary = Metadata Enrichment: { $total } checked, { $enriched } enriched ({ $abstracts } with abstracts), { $complete } complete, { $failed } not found
 popwin-fallback-enriched = PDF not available; metadata & abstract enriched
+popwin-reusedlocal = Reused an existing library PDF ({ $evidence } match in "{ $source }")

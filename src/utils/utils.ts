@@ -92,6 +92,30 @@ export class Utils {
     await Zotero.Attachments.importFromURL(importOptions);
   }
 
+  /**
+   * Adds a linked-file attachment on `item` pointing at an existing PDF on
+   * disk, so the same file is reused instead of stored a second time. Returns
+   * false when Zotero refuses to link (e.g. a group library, where linked files
+   * are not supported) so the caller can fall back to a normal download.
+   */
+  static async linkExistingPDF(
+    item: Zotero.Item,
+    filePath: string,
+  ): Promise<boolean> {
+    try {
+      const attachment = await Zotero.Attachments.linkFromFile({
+        file: filePath,
+        parentItemID: item.id,
+        contentType: "application/pdf",
+        title: item.getField("title") || "PDF",
+      });
+      return Boolean(attachment);
+    } catch (error) {
+      Zotero.debug(`[Sci-PDF] could not link ${filePath}: ${String(error)}`);
+      return false;
+    }
+  }
+
   static showPopWin(
     title: string,
     message: string,

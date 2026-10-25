@@ -27,3 +27,4 @@ popwin-enriching = 正在补齐元数据与摘要
 popwin-enriched = 已补齐文献信息
 popwin-enrichsummary = 元数据补齐完成：共 { $total } 篇，补齐 { $enriched } 篇（含摘要 { $abstracts } 篇），已完整 { $complete } 篇，未找到 { $failed } 篇
 popwin-fallback-enriched = 未获取到PDF，已自动补齐元数据与摘要
+popwin-reusedlocal = 已复用库中现有 PDF（依据 { $evidence }，来自《{ $source }》）

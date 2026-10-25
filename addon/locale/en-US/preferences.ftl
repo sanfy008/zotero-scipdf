@@ -17,4 +17,6 @@ pref-autoenrichmetadata =
     .label = Auto-fetch metadata & abstract if PDF is unavailable (OpenAlex/Crossref)
 pref-email-input = Contact email (optional, for OpenAlex):
 pref-scihub-input = Sci-Hub URLs:
+pref-reuselocalpdf =
+    .label = Reuse PDFs already in the library (link the existing file instead of downloading again)
 pref-help = { $name } Build { $version }

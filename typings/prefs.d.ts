@@ -16,6 +16,7 @@ declare namespace _ZoteroTypes {
       "semanticScholar": boolean;
       "arxiv": boolean;
       "scihubEnabled": boolean;
+      "reuseLocalPDF": boolean;
     };
   }
 }
