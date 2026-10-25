@@ -5,7 +5,12 @@
 // Sci-Hub is, and they complement each other — a copy missing from one is often
 // indexed by another — so we merge all of them rather than stopping at the first hit.
 import { getPref } from "../utils/prefs";
-import { titleSimilarity, TITLE_SIMILARITY_THRESHOLD } from "./DOICompleter";
+import { API_USER_AGENT } from "../utils/constants";
+import {
+  resolveEmail,
+  titleSimilarity,
+  TITLE_SIMILARITY_THRESHOLD,
+} from "./DOICompleter";
 
 export interface OACandidate {
   url: string;
@@ -47,7 +52,8 @@ export function parseUnpaywall(json: unknown): OACandidate[] {
     const pdf = asString(loc.url_for_pdf);
     if (pdf) out.push({ url: pdf, kind: "pdf", source: "Unpaywall" });
     const landing = asString(loc.url);
-    if (landing) out.push({ url: landing, kind: "landing", source: "Unpaywall" });
+    if (landing)
+      out.push({ url: landing, kind: "landing", source: "Unpaywall" });
   };
   pushLoc(root.best_oa_location);
   if (Array.isArray(root.oa_locations)) root.oa_locations.forEach(pushLoc);
@@ -85,7 +91,8 @@ export function parseOpenAlexOA(json: unknown): OACandidate[] {
     const pdf = asString(loc.pdf_url);
     if (pdf) out.push({ url: pdf, kind: "pdf", source: "OpenAlex" });
     const landing = asString(loc.landing_page_url);
-    if (landing) out.push({ url: landing, kind: "landing", source: "OpenAlex" });
+    if (landing)
+      out.push({ url: landing, kind: "landing", source: "OpenAlex" });
   };
   pushLoc(root.best_oa_location);
   if (Array.isArray(root.locations)) root.locations.forEach(pushLoc);
@@ -106,7 +113,9 @@ export function parseArXivFeed(
   while ((match = entryRegex.exec(xml)) !== null) {
     const block = match[1];
     const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(block);
-    const candTitle = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : "";
+    const candTitle = titleMatch
+      ? titleMatch[1].replace(/\s+/g, " ").trim()
+      : "";
 
     if (targetTitle && candTitle) {
       const sim = titleSimilarity(targetTitle, candTitle);
@@ -117,7 +126,7 @@ export function parseArXivFeed(
       /<link[^>]+(?:title=["']pdf["'][^>]*href=["']([^"']+)["']|href=["']([^"']+)["'][^>]*title=["']pdf["'])/i.exec(
         block,
       );
-    let pdfUrl = pdfLinkMatch ? (pdfLinkMatch[1] || pdfLinkMatch[2]) : null;
+    let pdfUrl = pdfLinkMatch ? pdfLinkMatch[1] || pdfLinkMatch[2] : null;
 
     if (!pdfUrl) {
       const idMatch =
@@ -139,14 +148,16 @@ export function parseArXivFeed(
 }
 
 // Direct-PDF candidates first (they need no scraping), then landing pages.
-// De-duplicate by URL while preserving the source-priority order of the input.
+// De-duplicate by URL — case-insensitively, since hosts are case-insensitive and
+// the same repository often appears with mixed casing across sources.
 export function orderCandidates(candidates: OACandidate[]): OACandidate[] {
   const seen = new Set<string>();
   const pdfs: OACandidate[] = [];
   const landings: OACandidate[] = [];
   for (const candidate of candidates) {
-    if (seen.has(candidate.url)) continue;
-    seen.add(candidate.url);
+    const key = candidate.url.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     (candidate.kind === "pdf" ? pdfs : landings).push(candidate);
   }
   return [...pdfs, ...landings];
@@ -191,7 +202,7 @@ export class OAResolver {
     arxivId?: string | null,
     title?: string | null,
   ): Promise<OACandidate[]> {
-    const trimmedEmail = email.trim();
+    const trimmedEmail = resolveEmail(email);
     const tasks: Promise<OACandidate[]>[] = [];
     const directCandidates: OACandidate[] = [];
 
@@ -241,7 +252,7 @@ export class OAResolver {
       timeout: 20000,
       successCodes: false,
       headers: {
-        "User-Agent": "zotero-scipdf (https://github.com/syt2/zotero-scipdf)",
+        "User-Agent": API_USER_AGENT,
       },
     });
     if (xhr.status !== 200) return null;
@@ -282,10 +293,19 @@ export class OAResolver {
     return parseOpenAlexOA(await this.getJSON(url));
   }
 
-  private static async fromArXivByTitle(
-    title: string,
-  ): Promise<OACandidate[]> {
+  private static async fromArXivByTitle(title: string): Promise<OACandidate[]> {
     if (!title || !title.trim()) return [];
+    // arXiv's title index is Latin-script only. A CJK-only title (no ASCII
+    // letters) can never match, so skip the round trip instead of waiting out
+    // the 15s timeout on every item.
+    if (
+      /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(
+        title,
+      ) &&
+      !/[a-z]{3,}/i.test(title)
+    ) {
+      return [];
+    }
     const clean = title
       .replace(/<[^>]*>/g, " ")
       .replace(/[:\-–—?]/g, " ")
@@ -300,7 +320,7 @@ export class OAResolver {
         responseType: "text",
         timeout: 15000,
         headers: {
-          "User-Agent": "zotero-scipdf (https://github.com/syt2/zotero-scipdf)",
+          "User-Agent": API_USER_AGENT,
         },
       });
       if (xhr.status !== 200 || !xhr.response) return [];

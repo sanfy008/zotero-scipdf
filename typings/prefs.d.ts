@@ -10,6 +10,7 @@ declare namespace _ZoteroTypes {
       "firstInstall": boolean;
       "email": string;
       "completeDOI": boolean;
+      "autoEnrichMetadata": boolean;
       "openAlex": boolean;
       "unpaywall": boolean;
       "semanticScholar": boolean;

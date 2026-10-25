@@ -92,10 +92,18 @@ function harness(request) {
       },
       "../utils/utils": { Utils: ui },
       "../utils/prefs": { getPref: (key) => key === "scihubEnabled" },
+      "./OperationGate": {
+        runExclusive: async (task) => {
+          await task();
+          return true;
+        },
+      },
       "./DOICompleter": {
         findDOI: async () => null,
         doiExists: async () => true,
         formatArXivDOI: (id) => `10.48550/arXiv.${id}`,
+        resolveEmail: (email) => email || "",
+        verifyAndRepairItemDOI: async () => ({ outcome: "skipped" }),
       },
       "./OAResolver": {
         OAResolver: { resolve: async () => [] },
@@ -218,4 +226,54 @@ test("all mirrors explicitly missing the PDF produce the not-found result", asyn
   await h.run([item()]);
   assert.equal(h.calls.length, 2);
   assert.equal(h.windows.at(-1).title, "popwin-pdfnotavaliable");
+});
+
+test("CAPTCHA challenge throttles the mirror and advances to next mirror", async () => {
+  const h = harness(({ calls }) => {
+    if (calls.length === 1) {
+      return {
+        status: 200,
+        statusText: "200 OK",
+        responseText:
+          '<form id="captcha"><altcha-widget challengeurl="/captcha/123"></altcha-widget></form>',
+        responseXML: null,
+      };
+    }
+    return page(200, true);
+  });
+  await h.run([item()]);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.imports.length, 1);
+  assert.equal(h.windows.at(-1).title, "popwin-fetchsuccess");
+});
+
+// --- Regression: DOI extraction from prose punctuation -------------------
+// The old terminator class only accepted ASCII whitespace and a few symbols, so
+// a DOI touching CJK punctuation or a comma produced no match at all.
+test("DOIs are extracted when followed by prose punctuation", () => {
+  const { matchDOIs } = identifiers;
+  const doi = "10.1038/s41567-025-02822-y";
+  for (const text of [
+    `${doi}，后面还有文字`,
+    `${doi}。`,
+    `see ${doi}, which is unrelated`,
+    `（${doi}）`,
+    `[${doi}]`,
+    `${doi}; and more`,
+    `${doi}\tmore`,
+  ]) {
+    assert.deepEqual(Array.from(matchDOIs(text)), [doi], `failed for ${text}`);
+  }
+});
+
+test("alphanumeric DOI suffixes and percent-encoding survive extraction", () => {
+  // cleanDOI deliberately decodes percent-encoding, so `%2F` comes back as a
+  // slash — the point here is that the suffix is not truncated mid-token.
+  assert.deepEqual(Array.from(identifiers.matchDOIs("10.1000/a%2Fb")), [
+    "10.1000/a/b",
+  ]);
+  assert.deepEqual(
+    Array.from(identifiers.matchDOIs("10.1016/S0140-6736(20)30183-5")),
+    ["10.1016/S0140-6736(20)30183-5"],
+  );
 });

@@ -12,5 +12,28 @@ export default zotero({
         "@typescript-eslint/no-unused-vars": "off",
       },
     },
+    {
+      // The unit tests load modules inside a `vm` context and pass host globals
+      // (URL, timers, ...) into that context as plain object properties, which
+      // the linter cannot see. They are also CommonJS, so the Node globals are
+      // real at runtime.
+      files: ["test/**/*.cjs"],
+      languageOptions: {
+        sourceType: "commonjs",
+        globals: {
+          URL: "readonly",
+          URLSearchParams: "readonly",
+          setTimeout: "readonly",
+          clearTimeout: "readonly",
+          setImmediate: "readonly",
+          require: "readonly",
+          module: "writable",
+          __dirname: "readonly",
+        },
+      },
+      rules: {
+        "no-unused-vars": "off",
+      },
+    },
   ],
 });

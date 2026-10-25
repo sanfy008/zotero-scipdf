@@ -15,6 +15,10 @@ function loadModule(file, imports = {}, globals = {}) {
   });
   runInNewContext(outputText, {
     exports,
+    URL,
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
     require(id) {
       assert.ok(Object.hasOwn(imports, id), `Unexpected import: ${id}`);
       return imports[id];
@@ -54,7 +58,11 @@ test("DOIManager executes batch audit, updates items, and produces summary", asy
   const fakeCompleter = {
     verifyAndRepairItemDOI: async (item) => {
       if (item.id === 1) {
-        return { outcome: "valid", oldDOI: "10.1002/atr.1396", newDOI: "10.1002/atr.1396" };
+        return {
+          outcome: "valid",
+          oldDOI: "10.1002/atr.1396",
+          newDOI: "10.1002/atr.1396",
+        };
       }
       if (item.id === 2) {
         return {
@@ -81,14 +89,28 @@ test("DOIManager executes batch audit, updates items, and produces summary", asy
       "../utils/locale": fakeLocale,
       "../utils/utils": { Utils: fakeUtils },
       "./DOICompleter": fakeCompleter,
+      "./OperationGate": {
+        runExclusive: async (task) => {
+          await task();
+          return true;
+        },
+      },
     },
     { Zotero: fakeZotero },
   );
 
   const items = [
     { id: 1, isRegularItem: () => true, getDisplayTitle: () => "Valid Paper" },
-    { id: 2, isRegularItem: () => true, getDisplayTitle: () => "Mismatched Paper" },
-    { id: 3, isRegularItem: () => true, getDisplayTitle: () => "Missing Paper" },
+    {
+      id: 2,
+      isRegularItem: () => true,
+      getDisplayTitle: () => "Mismatched Paper",
+    },
+    {
+      id: 3,
+      isRegularItem: () => true,
+      getDisplayTitle: () => "Missing Paper",
+    },
   ];
 
   await managerModule.DOIManager.auditAndRepairItems(items);
@@ -101,11 +123,15 @@ test("DOIManager executes batch audit, updates items, and produces summary", asy
 
   // Check that summary was written to window line
   const summaryLine = winLines[3];
-  assert.ok(summaryLine.text.includes("3 items: 1 valid, 1 repaired, 1 failed"));
+  assert.ok(
+    summaryLine.text.includes("3 items: 1 valid, 1 repaired, 1 failed"),
+  );
   assert.equal(summaryLine.type, "success");
 
   // Check popwins
   const successPops = popwins.filter((p) => p.type === "success");
   assert.equal(successPops.length, 1);
-  assert.ok(successPops[0].message.includes("10.1016/wrong.doi → 10.1057/right.doi"));
+  assert.ok(
+    successPops[0].message.includes("10.1016/wrong.doi → 10.1057/right.doi"),
+  );
 });

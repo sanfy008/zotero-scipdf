@@ -16,6 +16,7 @@ function loadModule(file, imports, globals = {}) {
   runInNewContext(outputText, {
     exports,
     require(id) {
+      if (id.endsWith("/constants")) return { API_USER_AGENT: "zotero-scipdf" };
       assert.ok(Object.hasOwn(imports, id), `Unexpected import: ${id}`);
       return imports[id];
     },

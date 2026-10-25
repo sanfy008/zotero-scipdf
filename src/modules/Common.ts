@@ -1,6 +1,7 @@
 import { config } from "../../package.json";
 import { getString } from "../utils/locale";
 import { DOIManager } from "./DOIManager";
+import { MetadataManager } from "./MetadataManager";
 import { SciHubFetcher } from "./SciHubFetcher";
 
 export class Common {
@@ -108,6 +109,35 @@ export class Common {
                 DOIManager.auditAndRepairItems(resolveItems(context.items));
               },
             },
+            {
+              menuType: "menuitem",
+              icon: menuIcon,
+              onShowing: (_event, context) => {
+                try {
+                  context.menuElem.setAttribute(
+                    "label",
+                    getString("menuitem-enrichmetadata"),
+                  );
+                  context.setIcon(menuIcon);
+                  const items = resolveItems(context.items);
+                  context.setVisible(
+                    items.some((item) => item.isRegularItem()),
+                  );
+                } catch (error) {
+                  Zotero.debug(
+                    `[Sci-PDF] failed to prepare enrich-metadata context menu: ${String(error)}`,
+                  );
+                  try {
+                    context.setVisible(false);
+                  } catch {
+                    // ignore: hiding is best-effort
+                  }
+                }
+              },
+              onCommand: (_event, context) => {
+                MetadataManager.enrichItems(resolveItems(context.items));
+              },
+            },
           ],
         });
       } catch (error) {
@@ -148,6 +178,20 @@ export class Common {
       },
       commandListener: () => {
         DOIManager.auditAndRepairItems(resolveItems());
+      },
+      icon: menuIcon,
+    });
+
+    ztoolkit.Menu.register("item", {
+      tag: "menuitem",
+      id: "zotero-itemmenu-enrich-metadata",
+      label: getString("menuitem-enrichmetadata"),
+      isHidden: () => {
+        const items = resolveItems();
+        return !items.some((item) => item.isRegularItem());
+      },
+      commandListener: () => {
+        MetadataManager.enrichItems(resolveItems());
       },
       icon: menuIcon,
     });

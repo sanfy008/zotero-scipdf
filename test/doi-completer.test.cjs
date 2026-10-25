@@ -15,7 +15,12 @@ function loadModule(file, imports = {}, globals = {}) {
   });
   runInNewContext(outputText, {
     exports,
+    URL,
+    URLSearchParams,
+    setTimeout,
+    clearTimeout,
     require(id) {
+      if (id.endsWith("/constants")) return { API_USER_AGENT: "zotero-scipdf" };
       assert.ok(Object.hasOwn(imports, id), `Unexpected import: ${id}`);
       return imports[id];
     },
@@ -215,7 +220,9 @@ test("selectBestDOI accepts high-confidence match when subtitle was omitted", ()
 
 test("cleanQueryTitle strips punctuation and collapses whitespace", () => {
   assert.equal(
-    cleanQueryTitle("Street network or functional attractors? Capturing pedestrian movement patterns"),
+    cleanQueryTitle(
+      "Street network or functional attractors? Capturing pedestrian movement patterns",
+    ),
     "Street network or functional attractors Capturing pedestrian movement patterns",
   );
   assert.equal(
@@ -235,7 +242,12 @@ test("recordDOIAudit appends timestamped entry to extra field without overwritin
     addTag: (t) => tags.push(t),
   };
 
-  recordDOIAudit(fakeItem, "10.1057/fake.bad", "10.1057/real.good", "404 not found");
+  recordDOIAudit(
+    fakeItem,
+    "10.1057/fake.bad",
+    "10.1057/real.good",
+    "404 not found",
+  );
   assert.ok(extraContent.includes("PMID: 123456"));
   assert.ok(extraContent.includes("[DOI-Audit"));
   assert.ok(extraContent.includes("10.1057/fake.bad -> 10.1057/real.good"));
@@ -290,7 +302,9 @@ test("verifyDOI flags mismatched DOI (hallucinated real DOI belonging to other p
             status: 200,
             response: {
               message: {
-                title: ["Analyzing pedestrian individual and interaction collision avoidance dynamics"],
+                title: [
+                  "Analyzing pedestrian individual and interaction collision avoidance dynamics",
+                ],
                 issued: { "date-parts": [[2021]] },
                 author: [{ family: "Qu" }, { family: "Wu" }],
               },
@@ -336,7 +350,9 @@ test("verifyDOI flags valid DOI when metadata matches title and author", async (
             status: 200,
             response: {
               message: {
-                title: ["Microscopic decision model for pedestrian route choice at signalized crosswalks"],
+                title: [
+                  "Microscopic decision model for pedestrian route choice at signalized crosswalks",
+                ],
                 issued: { "date-parts": [[2016]] },
                 author: [{ family: "Xie" }, { family: "Wong" }],
               },
@@ -420,7 +436,8 @@ test("verifyAndRepairItemDOI corrects a mismatched DOI using OpenAlex and Crossr
               results: [
                 {
                   doi: "https://doi.org/10.1057/s41289-022-00178-w",
-                  title: "Street network or functional attractors? Space syntax MCDA",
+                  title:
+                    "Street network or functional attractors? Space syntax MCDA",
                   publication_year: 2022,
                   authorships: [{ author: { display_name: "S. Yang" } }],
                 },
@@ -449,12 +466,331 @@ test("verifyAndRepairItemDOI corrects a mismatched DOI using OpenAlex and Crossr
     { Zotero: customZotero },
   );
 
-  const report = await mod.verifyAndRepairItemDOI(fakeItem, "sanfy007@gmail.com");
+  const report = await mod.verifyAndRepairItemDOI(
+    fakeItem,
+    "sanfy007@gmail.com",
+  );
   assert.equal(report.outcome, "repaired");
   assert.equal(report.oldDOI, "10.1016/j.trc.2021.103445");
   assert.equal(report.newDOI, "10.1057/s41289-022-00178-w");
   assert.equal(fields.DOI, "10.1057/s41289-022-00178-w");
   assert.ok(fields.extra.includes("[DOI-Audit"));
-  assert.ok(fields.extra.includes("10.1016/j.trc.2021.103445 -> 10.1057/s41289-022-00178-w"));
+  assert.ok(
+    fields.extra.includes(
+      "10.1016/j.trc.2021.103445 -> 10.1057/s41289-022-00178-w",
+    ),
+  );
   assert.ok(tags.includes("_doi_repaired"));
+});
+
+test("searchCrossrefForDOI falls back to title-only when author query misses match due to publisher omitting author metadata", async () => {
+  const requestedUrls = [];
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        requestedUrls.push(url);
+        // First call with query.author returns unrelated records
+        if (url.includes("query.author=")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                items: [
+                  {
+                    DOI: "10.1007/unrelated-author-match",
+                    title: [
+                      "Completely Unrelated Paper With Matching Author Name",
+                    ],
+                    author: [{ family: "Appert-Rolland" }],
+                    issued: { "date-parts": [[2020]] },
+                  },
+                ],
+              },
+            },
+          };
+        }
+        // Second call without query.author returns the true item where publisher omitted authors
+        return {
+          status: 200,
+          response: {
+            message: {
+              items: [
+                {
+                  DOI: "10.1016/bs.atpp.2025.04.004",
+                  title: ["Macroscopic pedestrian dynamics modelling"],
+                  author: [],
+                  issued: { "date-parts": [[2025]] },
+                },
+              ],
+            },
+          },
+        };
+      },
+    },
+  };
+
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const query = {
+    title: "Macroscopic pedestrian dynamics modelling",
+    year: 2025,
+    authorSurname: "Appert-Rolland",
+  };
+
+  const candidates = await mod.searchCrossrefForDOI(
+    query,
+    "sanfy007@gmail.com",
+  );
+  assert.equal(requestedUrls.length, 2);
+  assert.ok(requestedUrls[0].includes("query.author=Appert-Rolland"));
+  assert.ok(!requestedUrls[1].includes("query.author="));
+  assert.ok(candidates.some((c) => c.DOI === "10.1016/bs.atpp.2025.04.004"));
+
+  const best = mod.selectBestDOI(query, candidates);
+  assert.equal(best?.doi, "10.1016/bs.atpp.2025.04.004");
+  assert.equal(best?.similarity, 1);
+});
+
+test("verifyAndRepairItemDOI repairs 404 non-existent DOI when author is omitted by publisher in Crossref", async () => {
+  const fields = {
+    title: "Macroscopic pedestrian dynamics modelling",
+    DOI: "10.1016/bs.atpp.2024.11.002",
+    date: "2024",
+    extra: "",
+  };
+  const tags = [];
+  const fakeItem = {
+    isRegularItem: () => true,
+    getDisplayTitle: () => fields.title,
+    getField: (f) => fields[f] || "",
+    setField: (f, v) => {
+      fields[f] = v;
+    },
+    getCreators: () => [{ lastName: "Appert-Rolland" }],
+    getBestAttachments: async () => [],
+    addTag: (t) => tags.push(t),
+    removeTag: (t) => {
+      const idx = tags.indexOf(t);
+      if (idx !== -1) tags.splice(idx, 1);
+    },
+    saveTx: async () => {},
+  };
+
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        // 1. Current DOI does not exist (404 in doiRA)
+        if (url.includes("doiRA/10.1016/bs.atpp.2024.11.002")) {
+          return { status: 200, response: [{ status: "DOI does not exist" }] };
+        }
+        // 2. OpenAlex search returns nothing
+        if (url.includes("api.openalex.org/works?search=")) {
+          return { status: 200, response: { results: [] } };
+        }
+        // 3. Crossref search with author returns unrelated
+        if (url.includes("query.author=")) {
+          return { status: 200, response: { message: { items: [] } } };
+        }
+        // 4. Crossref search fallback without author returns real DOI
+        if (url.includes("api.crossref.org/works?query.bibliographic=")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                items: [
+                  {
+                    DOI: "10.1016/bs.atpp.2025.04.004",
+                    title: ["Macroscopic pedestrian dynamics modelling"],
+                    author: [],
+                    issued: { "date-parts": [[2025]] },
+                  },
+                ],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    { Zotero: customZotero },
+  );
+
+  const report = await mod.verifyAndRepairItemDOI(
+    fakeItem,
+    "sanfy007@gmail.com",
+  );
+  assert.equal(report.outcome, "repaired");
+  assert.equal(report.oldDOI, "10.1016/bs.atpp.2024.11.002");
+  assert.equal(report.newDOI, "10.1016/bs.atpp.2025.04.004");
+  assert.equal(fields.DOI, "10.1016/bs.atpp.2025.04.004");
+  assert.ok(fields.extra.includes("[DOI-Audit"));
+  assert.ok(
+    fields.extra.includes(
+      "10.1016/bs.atpp.2024.11.002 -> 10.1016/bs.atpp.2025.04.004 (DOI does not exist (404))",
+    ),
+  );
+  assert.ok(tags.includes("_doi_repaired"));
+});
+
+test("verifyDOI does not rewrite a DOI on a title-only difference (no hard contradiction)", async () => {
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA"))
+          return { status: 200, response: [{ RA: "Crossref" }] };
+        if (url.includes("api.crossref.org/works/10.1000")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                // Same paper's preprint title: differs, but year and author agree.
+                title: ["Attention Is All You Need: A Preprint Version"],
+                issued: { "date-parts": [[2017]] },
+                author: [{ family: "Vaswani" }],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    { "../utils/identifierPatterns": identifiers, "../utils/utils": { Utils } },
+    { Zotero: customZotero },
+  );
+
+  const res = await mod.verifyDOI(
+    "10.1000/182",
+    "Attention is all you need",
+    2017,
+    "Vaswani",
+  );
+  // Must not be "mismatched" — that status authorises a rewrite. Year and
+  // author agree, so the DOI is in fact accepted as valid.
+  assert.notEqual(res.status, "mismatched");
+  assert.equal(res.status, "valid");
+});
+
+test("verifyDOI still flags a hard contradiction (different year and author)", async () => {
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA"))
+          return { status: 200, response: [{ RA: "Crossref" }] };
+        if (url.includes("api.crossref.org/works/10.1000")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                title: ["Attention Is All You Need Today"],
+                issued: { "date-parts": [[1998]] },
+                author: [{ family: "Smith" }],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    { "../utils/identifierPatterns": identifiers, "../utils/utils": { Utils } },
+    { Zotero: customZotero },
+  );
+
+  const res = await mod.verifyDOI(
+    "10.1000/182",
+    "Attention is all you need but the registered work is a different one entirely",
+    2017,
+    "Vaswani",
+  );
+  assert.equal(res.status, "mismatched");
+});
+
+test("the verified fast-path tag is pinned to the current DOI", async () => {
+  const tags = ["_doi_verified:10.1000/other"]; // stale tag from a different DOI
+  const fields = {
+    title: "Attention is all you need",
+    DOI: "10.1000/182",
+    date: "2017",
+    extra: "",
+  };
+  const item = {
+    isRegularItem: () => true,
+    getDisplayTitle: () => fields.title,
+    getField: (f) => fields[f] || "",
+    setField: (f, v) => {
+      fields[f] = v;
+    },
+    getCreators: () => [{ lastName: "Vaswani" }],
+    getBestAttachments: async () => [],
+    getTags: () => tags.map((tag) => ({ tag })),
+    hasTag: (t) => tags.includes(t),
+    addTag: (t) => tags.push(t),
+    removeTag: (t) => {
+      const i = tags.indexOf(t);
+      if (i !== -1) tags.splice(i, 1);
+    },
+    saveTx: async () => {},
+  };
+
+  let doiRAHit = false;
+  const customZotero = {
+    debug: () => {},
+    HTTP: {
+      request: async (method, url) => {
+        if (url.includes("doiRA")) {
+          doiRAHit = true;
+          return { status: 200, response: [{ RA: "Crossref" }] };
+        }
+        if (url.includes("api.crossref.org/works/10.1000")) {
+          return {
+            status: 200,
+            response: {
+              message: {
+                title: ["Attention is all you need"],
+                issued: { "date-parts": [[2017]] },
+                author: [{ family: "Vaswani" }],
+              },
+            },
+          };
+        }
+        return { status: 404 };
+      },
+    },
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    { "../utils/identifierPatterns": identifiers, "../utils/utils": { Utils } },
+    { Zotero: customZotero },
+  );
+
+  const report = await mod.verifyAndRepairItemDOI(item, "a@b.c");
+  // The stale tag must NOT short-circuit: the network check has to run.
+  assert.equal(doiRAHit, true);
+  assert.equal(report.outcome, "valid");
+  assert.ok(tags.includes("_doi_verified:10.1000/182"));
+  assert.ok(!tags.includes("_doi_verified:10.1000/other"));
 });

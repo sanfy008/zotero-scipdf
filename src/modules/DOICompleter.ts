@@ -1,5 +1,20 @@
 import { cleanDOI } from "../utils/identifierPatterns";
 import { Utils } from "../utils/utils";
+import { API_USER_AGENT } from "../utils/constants";
+export function resolveEmail(email = ""): string {
+  if (email && email.trim()) return email.trim();
+  try {
+    if (typeof Zotero !== "undefined" && Zotero?.Prefs?.get) {
+      const pref =
+        (Zotero.Prefs.get("extensions.zotero.scipdf.email", true) as string) ||
+        (Zotero.Prefs.get("extensions.sci-pdf.email", true) as string);
+      if (typeof pref === "string" && pref.trim()) return pref.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return "";
+}
 
 export interface CrossrefCandidate {
   DOI?: string;
@@ -23,9 +38,9 @@ export interface DOIMatch {
 }
 
 export type DOIVerificationStatus =
-  | "valid"       // DOI exists globally and title matches item title
-  | "not_found"   // DOI does not exist anywhere globally (doiRA 404 / Invalid)
-  | "mismatched"  // DOI exists globally, but title clearly does NOT match (hallucinated / swapped)
+  | "valid" // DOI exists globally and title matches item title
+  | "not_found" // DOI does not exist anywhere globally (doiRA 404 / Invalid)
+  | "mismatched" // DOI exists globally, but title clearly does NOT match (hallucinated / swapped)
   | "unverified"; // Network / lookup failure, keep current to prevent false edits
 
 export interface DOIVerificationResult {
@@ -154,11 +169,7 @@ export function selectBestDOI(
 
     // If full title similarity is below threshold (e.g. subtitle omitted),
     // check if the primary title matches with high similarity when year and author strictly match.
-    if (
-      similarity < TITLE_SIMILARITY_THRESHOLD &&
-      sameYear &&
-      authorMatches
-    ) {
+    if (similarity < TITLE_SIMILARITY_THRESHOLD && sameYear && authorMatches) {
       const queryMain = query.title.split(/[:\-–—?]/)[0].trim();
       const candMain = candidateTitle.split(/[:\-–—?]/)[0].trim();
       if (queryMain.length >= 10 && candMain.length >= 10) {
@@ -232,38 +243,99 @@ export function cleanQueryTitle(title: string): string {
     .replace(/\s+/g, " ");
 }
 
-function buildCrossrefURL(query: DOIQuery, email: string): string {
+export function buildCrossrefURL(
+  query: DOIQuery,
+  email: string,
+  includeAuthor = true,
+): string {
   const params = new URLSearchParams();
   params.set("query.bibliographic", cleanQueryTitle(query.title));
-  if (query.authorSurname) {
+  if (includeAuthor && query.authorSurname) {
     params.set("query.author", query.authorSurname);
   }
-  params.set("rows", "5");
+  // 20 rather than 5: with an author filter that does not apply (publishers
+  // frequently omit authors from deposits) the true record can sit well below
+  // the top five, which is what produced the 404-DOI repair failures.
+  params.set("rows", "20");
   params.set("select", "DOI,title,author,issued,score");
-  const mailto = email.trim();
+  const mailto = resolveEmail(email);
   if (mailto) {
     params.set("mailto", mailto);
   }
   return `https://api.crossref.org/works?${params.toString()}`;
 }
 
+// Wraps Zotero.HTTP.request with a hard deadline. Zotero's own `timeout`
+// option is not always honoured (especially across redirects), so we also race
+// against a timer and cancel the underlying request when it fires.
+// Lives here rather than on Utils so it resolves `Zotero` in this module's
+// scope, which keeps it testable and avoids a cross-module global lookup.
+export async function requestWithHardTimeout<T = any>(
+  method: "GET" | "POST",
+  url: string,
+  options: any = {},
+  timeoutMs: number = 10000,
+): Promise<any> {
+  let cancelFn: (() => void) | undefined;
+  const originalCanceller = options.cancellerReceiver;
+
+  const requestPromise = Zotero.HTTP.request(method, url, {
+    ...options,
+    timeout: timeoutMs,
+    cancellerReceiver: (cancel: () => void) => {
+      cancelFn = cancel;
+      if (typeof originalCanceller === "function") {
+        originalCanceller(cancel);
+      }
+    },
+  });
+
+  let timer: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        if (cancelFn) cancelFn();
+      } catch {
+        // ignore
+      }
+      reject(new Error(`Request timed out after ${timeoutMs}ms: ${url}`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([requestPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Session-level caches to eliminate duplicate HTTP requests across batch operations
+const doiExistsCache = new Map<string, boolean>();
+const doiMetadataCache = new Map<
+  string,
+  { title?: string; year?: number | null; authors?: string[] }
+>();
+
 // Checks whether a DOI actually exists in the global DOI system, via the DOI
 // registration-agency endpoint.
 export async function doiExists(doi: string): Promise<boolean | null> {
-  const target = cleanDOI(doi);
+  const target = cleanDOI(doi).toLowerCase();
   if (!target) return null;
+  if (doiExistsCache.has(target)) {
+    return doiExistsCache.get(target)!;
+  }
   try {
-    const xhr = await Zotero.HTTP.request(
+    const xhr = await requestWithHardTimeout(
       "GET",
       `https://doi.org/doiRA/${encodeURI(target)}`,
       {
         responseType: "json",
-        timeout: 15000,
         successCodes: false,
         headers: {
-          "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
+          "User-Agent": API_USER_AGENT,
         },
       },
+      8000,
     );
     if (xhr.status !== 200) return null;
     let data = xhr.response;
@@ -277,10 +349,14 @@ export async function doiExists(doi: string): Promise<boolean | null> {
     const entry = Array.isArray(data) ? data[0] : data;
     if (!entry || typeof entry !== "object") return null;
     const record = entry as Record<string, unknown>;
-    if (typeof record.RA === "string" && record.RA.trim()) return true;
+    if (typeof record.RA === "string" && record.RA.trim()) {
+      doiExistsCache.set(target, true);
+      return true;
+    }
     const status =
       typeof record.status === "string" ? record.status.toLowerCase() : "";
     if (status.includes("does not exist") || status.includes("invalid")) {
+      doiExistsCache.set(target, false);
       return false;
     }
     return null;
@@ -294,21 +370,34 @@ export async function doiExists(doi: string): Promise<boolean | null> {
 export async function fetchDOIMetadata(
   doi: string,
   email = "",
-): Promise<{ title?: string; year?: number | null; authors?: string[] } | null> {
-  const target = cleanDOI(doi);
+): Promise<{
+  title?: string;
+  year?: number | null;
+  authors?: string[];
+} | null> {
+  const target = cleanDOI(doi).toLowerCase();
   if (!target) return null;
+
+  if (doiMetadataCache.has(target)) {
+    return doiMetadataCache.get(target)!;
+  }
+
+  const mailto = resolveEmail(email);
 
   // 1. Crossref works lookup
   try {
-    const mailto = email.trim();
     const crUrl = `https://api.crossref.org/works/${encodeURIComponent(target)}${mailto ? `?mailto=${encodeURIComponent(mailto)}` : ""}`;
-    const xhr = await Zotero.HTTP.request("GET", crUrl, {
-      responseType: "json",
-      timeout: 12000,
-      headers: {
-        "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
+    const xhr = await requestWithHardTimeout(
+      "GET",
+      crUrl,
+      {
+        responseType: "json",
+        headers: {
+          "User-Agent": API_USER_AGENT,
+        },
       },
-    });
+      10000,
+    );
     if (xhr.status === 200) {
       let data = xhr.response;
       if (typeof data === "string") data = JSON.parse(data);
@@ -316,12 +405,19 @@ export async function fetchDOIMetadata(
       if (msg) {
         const titleArr = msg.title as string[] | undefined;
         const title = titleArr?.[0];
-        const year = (msg.issued as { "date-parts"?: number[][] })?.["date-parts"]?.[0]?.[0] ?? null;
-        const authors = ((msg.author as Array<{ family?: string; name?: string }>) || [])
+        const year =
+          (msg.issued as { "date-parts"?: number[][] })?.[
+            "date-parts"
+          ]?.[0]?.[0] ?? null;
+        const authors = (
+          (msg.author as Array<{ family?: string; name?: string }>) || []
+        )
           .map((a) => a.family || a.name || "")
           .filter((s) => s.length > 0);
         if (title) {
-          return { title, year, authors };
+          const res = { title, year, authors };
+          doiMetadataCache.set(target, res);
+          return res;
         }
       }
     }
@@ -331,15 +427,18 @@ export async function fetchDOIMetadata(
 
   // 2. OpenAlex works lookup
   try {
-    const mailto = email.trim();
     const oaUrl = `https://api.openalex.org/works/doi:${encodeURIComponent(target)}${mailto ? `?mailto=${encodeURIComponent(mailto)}` : ""}`;
-    const xhr = await Zotero.HTTP.request("GET", oaUrl, {
-      responseType: "json",
-      timeout: 12000,
-      headers: {
-        "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
+    const xhr = await requestWithHardTimeout(
+      "GET",
+      oaUrl,
+      {
+        responseType: "json",
+        headers: {
+          "User-Agent": API_USER_AGENT,
+        },
       },
-    });
+      10000,
+    );
     if (xhr.status === 200) {
       let data = xhr.response;
       if (typeof data === "string") data = JSON.parse(data);
@@ -350,7 +449,10 @@ export async function fetchDOIMetadata(
         authorships?: Array<{ author?: { display_name?: string } }>;
       };
       const title = record?.title || record?.display_name;
-      const year = typeof record?.publication_year === "number" ? record.publication_year : null;
+      const year =
+        typeof record?.publication_year === "number"
+          ? record.publication_year
+          : null;
       const authors = (record?.authorships || [])
         .map((a) => {
           const name = a.author?.display_name || "";
@@ -359,7 +461,9 @@ export async function fetchDOIMetadata(
         })
         .filter((s) => s.length > 0);
       if (title) {
-        return { title, year, authors };
+        const res = { title, year, authors };
+        doiMetadataCache.set(target, res);
+        return res;
       }
     }
   } catch {
@@ -369,26 +473,36 @@ export async function fetchDOIMetadata(
   // 3. DataCite lookup (covers arXiv preprints, Zenodo, etc.)
   try {
     const dcUrl = `https://api.datacite.org/dois/${encodeURIComponent(target)}`;
-    const xhr = await Zotero.HTTP.request("GET", dcUrl, {
-      responseType: "json",
-      timeout: 12000,
-      headers: {
-        "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
+    const xhr = await requestWithHardTimeout(
+      "GET",
+      dcUrl,
+      {
+        responseType: "json",
+        headers: {
+          "User-Agent": API_USER_AGENT,
+        },
       },
-    });
+      8000,
+    );
     if (xhr.status === 200) {
       let data = xhr.response;
       if (typeof data === "string") data = JSON.parse(data);
-      const attr = (data as { data?: { attributes?: Record<string, unknown> } })?.data?.attributes;
+      const attr = (data as { data?: { attributes?: Record<string, unknown> } })
+        ?.data?.attributes;
       if (attr) {
         const titles = attr.titles as Array<{ title?: string }> | undefined;
         const title = titles?.[0]?.title;
-        const year = typeof attr.publicationYear === "number" ? attr.publicationYear : null;
+        const year =
+          typeof attr.publicationYear === "number"
+            ? attr.publicationYear
+            : null;
         const authors = ((attr.creators as Array<{ name?: string }>) || [])
           .map((c) => c.name || "")
           .filter((s) => s.length > 0);
         if (title) {
-          return { title, year, authors };
+          const res = { title, year, authors };
+          doiMetadataCache.set(target, res);
+          return res;
         }
       }
     }
@@ -451,7 +565,7 @@ export async function verifyDOI(
     expMain.length >= 10 && regMain.length >= 10
       ? titleSimilarity(expMain, regMain)
       : sim;
-  const effectiveSim = Math.max(sim, mainSim >= 0.90 ? 0.90 : 0);
+  const effectiveSim = Math.max(sim, mainSim >= 0.9 ? 0.9 : 0);
 
   // Match check
   if (effectiveSim >= 0.75) {
@@ -466,7 +580,7 @@ export async function verifyDOI(
   }
 
   // If similarity is very low and main clause also fails, it's definitely mismatched!
-  if (effectiveSim < 0.60 && mainSim < 0.70) {
+  if (effectiveSim < 0.6 && mainSim < 0.7) {
     return {
       status: "mismatched",
       doi: clean,
@@ -505,6 +619,28 @@ export async function verifyDOI(
     };
   }
 
+  // Borderline title, but the year or the author disagrees outright. A genuine
+  // mismatch has at least one hard contradiction; a title difference alone
+  // (preprint vs. published, translated title, dropped subtitle) does not.
+  // Stay `unverified` so the caller never rewrites a DOI on title alone.
+  const hardContradiction =
+    (expectedYear != null && candYear != null && !yearMatch) ||
+    (wantedSurname != null &&
+      metadata.authors != null &&
+      metadata.authors.length > 0 &&
+      !authorMatch);
+  if (!hardContradiction && effectiveSim >= 0.6) {
+    return {
+      status: "unverified",
+      doi: clean,
+      registeredTitle: regTitle,
+      similarity: effectiveSim,
+      registeredYear: metadata.year,
+      registeredAuthors: metadata.authors,
+      message: `Title differs but year/author do not contradict; not rewriting: "${regTitle}"`,
+    };
+  }
+
   return {
     status: "mismatched",
     doi: clean,
@@ -516,24 +652,48 @@ export async function verifyDOI(
   };
 }
 
+let openAlexSearchCooldownUntil = 0;
+
+export function isOpenAlexSearchThrottled(): boolean {
+  return Date.now() < openAlexSearchCooldownUntil;
+}
+
+export function throttleOpenAlexSearch(durationMs: number = 60000): void {
+  openAlexSearchCooldownUntil = Date.now() + durationMs;
+}
+
 // Search OpenAlex works API for candidate DOIs by title
 export async function searchOpenAlexForDOI(
   query: DOIQuery,
   email = "",
 ): Promise<CrossrefCandidate[]> {
+  if (isOpenAlexSearchThrottled()) {
+    return [];
+  }
   const cleanTitle = cleanQueryTitle(query.title);
   if (!cleanTitle) return [];
 
   try {
-    const mailto = email.trim();
+    const mailto = resolveEmail(email);
     const url = `https://api.openalex.org/works?search=${encodeURIComponent(cleanTitle)}&per-page=5${mailto ? `&mailto=${encodeURIComponent(mailto)}` : ""}`;
-    const xhr = await Zotero.HTTP.request("GET", url, {
-      responseType: "json",
-      timeout: 15000,
-      headers: {
-        "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
+    const xhr = await requestWithHardTimeout(
+      "GET",
+      url,
+      {
+        responseType: "json",
+        headers: {
+          "User-Agent": API_USER_AGENT,
+        },
       },
-    });
+      10000,
+    );
+    if (xhr.status === 429) {
+      throttleOpenAlexSearch(60000);
+      Zotero.debug(
+        "[Sci-PDF] OpenAlex search rate limited (429), cooling down for 60s",
+      );
+      return [];
+    }
     if (xhr.status !== 200) return [];
     let data = xhr.response;
     if (typeof data === "string") data = JSON.parse(data);
@@ -565,15 +725,49 @@ export async function searchOpenAlexForDOI(
         DOI: doi,
         title: [title],
         author: authors,
-        issued: typeof it.publication_year === "number" ? { "date-parts": [[it.publication_year]] } : undefined,
+        issued:
+          typeof it.publication_year === "number"
+            ? { "date-parts": [[it.publication_year]] }
+            : undefined,
         source: "openalex",
       });
     }
     return candidates;
   } catch (error) {
-    Zotero.debug(`[Sci-PDF] OpenAlex DOI search failed: ${String(error)}`);
+    if (String(error).includes("429")) {
+      throttleOpenAlexSearch(60000);
+      Zotero.debug(
+        "[Sci-PDF] OpenAlex search rate limited (429), cooling down for 60s",
+      );
+    } else {
+      Zotero.debug(`[Sci-PDF] OpenAlex DOI search failed: ${String(error)}`);
+    }
     return [];
   }
+}
+
+async function fetchCrossrefItems(url: string): Promise<CrossrefCandidate[]> {
+  const xhr = await requestWithHardTimeout(
+    "GET",
+    url,
+    {
+      responseType: "json",
+      headers: {
+        "User-Agent": API_USER_AGENT,
+      },
+    },
+    10000,
+  );
+  if (xhr.status !== 200) return [];
+  let data = xhr.response;
+  if (typeof data === "string") data = JSON.parse(data);
+  const items = (data as { message?: { items?: unknown[] } })?.message?.items;
+  if (!Array.isArray(items)) return [];
+
+  return items.map((cand) => ({
+    ...(cand as CrossrefCandidate),
+    source: "crossref",
+  }));
 }
 
 // Search Crossref works API for candidate DOIs
@@ -582,27 +776,40 @@ export async function searchCrossrefForDOI(
   email = "",
 ): Promise<CrossrefCandidate[]> {
   try {
-    const xhr = await Zotero.HTTP.request(
-      "GET",
-      buildCrossrefURL(query, email),
-      {
-        responseType: "json",
-        timeout: 20000,
-        headers: {
-          "User-Agent": "zotero-scipdf (https://github.com/sanfy008/zotero-scipdf)",
-        },
-      },
+    const candidates = await fetchCrossrefItems(
+      buildCrossrefURL(query, email, true),
     );
-    if (xhr.status !== 200) return [];
-    let data = xhr.response;
-    if (typeof data === "string") data = JSON.parse(data);
-    const items = (data as { message?: { items?: unknown[] } })?.message?.items;
-    if (!Array.isArray(items)) return [];
 
-    return items.map((cand) => ({
-      ...(cand as CrossrefCandidate),
-      source: "crossref",
-    }));
+    // If query had an author surname, check if any returned candidate has a strong title match (>= 0.85).
+    // Publishers sometimes omit author metadata in Crossref deposits (e.g. Elsevier series chapters,
+    // conference proceedings, books). In that case, query.author strictly excludes the true record.
+    // Fall back to title-only Crossref search.
+    if (query.authorSurname) {
+      const hasStrongMatch = candidates.some((cand) => {
+        const title = cand.title?.[0];
+        return title && titleSimilarity(query.title, title) >= 0.85;
+      });
+
+      if (!hasStrongMatch) {
+        const fallbackCandidates = await fetchCrossrefItems(
+          buildCrossrefURL(query, email, false),
+        );
+        const seen = new Set(
+          candidates
+            .map((c) => c.DOI?.toLowerCase().trim())
+            .filter((d): d is string => Boolean(d)),
+        );
+        for (const fc of fallbackCandidates) {
+          const d = fc.DOI?.toLowerCase().trim();
+          if (d && !seen.has(d)) {
+            seen.add(d);
+            candidates.push(fc);
+          }
+        }
+      }
+    }
+
+    return candidates;
   } catch (error) {
     Zotero.debug(`[Sci-PDF] Crossref DOI search failed: ${String(error)}`);
     return [];
@@ -676,6 +883,7 @@ export function recordDOIAudit(
 export async function verifyAndRepairItemDOI(
   item: Zotero.Item,
   email = "",
+  allowNetwork = true,
 ): Promise<DOIRepairReport> {
   const title = item.getField("title");
   if (!title || typeof title !== "string" || !title.trim()) {
@@ -690,6 +898,19 @@ export async function verifyAndRepairItemDOI(
 
   const arxivIds = await Utils.extractArXivIDs(item);
   const existingDOIs = await Utils.extractDOIs(item);
+
+  // Callers that already verified this item in the same operation (e.g. the
+  // fetch flow) pass allowNetwork=false purely to read the local state back,
+  // avoiding a second round of registry/metadata lookups.
+  if (!allowNetwork) {
+    return {
+      outcome: existingDOIs.length > 0 ? "valid" : "unresolved",
+      oldDOI: existingDOIs[0],
+      newDOI: existingDOIs[0],
+      detail: existingDOIs.length > 0 ? undefined : "missing",
+      message: "Network verification skipped (already resolved by caller)",
+    };
+  }
 
   // 1. If item has NO DOI at all:
   if (existingDOIs.length === 0) {
@@ -708,10 +929,19 @@ export async function verifyAndRepairItemDOI(
 
     const match = await findDOIMultiSource(query, email);
     if (!match) {
-      return { outcome: "unresolved", detail: "missing", message: "No matching DOI found" };
+      return {
+        outcome: "unresolved",
+        detail: "missing",
+        message: "No matching DOI found",
+      };
     }
     item.setField("DOI", match.doi);
-    recordDOIAudit(item, null, match.doi, `Found via ${match.source || "multi-source"}`);
+    recordDOIAudit(
+      item,
+      null,
+      match.doi,
+      `Found via ${match.source || "multi-source"}`,
+    );
     await item.saveTx();
     return {
       outcome: "completed",
@@ -724,6 +954,24 @@ export async function verifyAndRepairItemDOI(
 
   // 2. Item HAS an existing DOI: perform bidirectional verification
   const currentDOI = cleanDOI(existingDOIs[0]);
+
+  // Fast-path, but only when the cached tag pins the exact DOI that is on the
+  // item right now. A bare `_doi_verified` (written by older versions) is
+  // deliberately ignored: if the DOI was later edited back to a wrong value,
+  // that stale tag must not keep vouching for it.
+  const verifiedTag = `_doi_verified:${currentDOI.toLowerCase()}`;
+  if (
+    typeof (item as any).hasTag === "function" &&
+    (item as any).hasTag(verifiedTag)
+  ) {
+    return {
+      outcome: "valid",
+      oldDOI: currentDOI,
+      newDOI: currentDOI,
+      message: "DOI already verified and tagged (fast-path)",
+    };
+  }
+
   const verification = await verifyDOI(
     currentDOI,
     query.title,
@@ -733,11 +981,29 @@ export async function verifyAndRepairItemDOI(
   );
 
   if (verification.status === "valid") {
+    // Drop any tag left by an earlier DOI so only the current value is cached.
     try {
-      item.addTag("_doi_verified", 1);
-      await item.saveTx();
+      for (const tag of item.getTags().map((t) => t.tag)) {
+        if (
+          tag === "_doi_verified" ||
+          (tag.startsWith("_doi_verified:") && tag !== verifiedTag)
+        ) {
+          item.removeTag(tag);
+        }
+      }
     } catch {
-      // ignore
+      // ignore tag failures
+    }
+    if (
+      typeof (item as any).hasTag === "function" &&
+      !(item as any).hasTag(verifiedTag)
+    ) {
+      try {
+        item.addTag(verifiedTag, 1);
+        await item.saveTx();
+      } catch {
+        // ignore
+      }
     }
     return {
       outcome: "valid",

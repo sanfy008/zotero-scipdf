@@ -2,7 +2,13 @@ import { getString } from "../utils/locale";
 import { getPref } from "../utils/prefs";
 import { Utils } from "../utils/utils";
 import { CustomResolverManager } from "./CustomResolverManager";
-import { verifyAndRepairItemDOI } from "./DOICompleter";
+import {
+  resolveEmail,
+  verifyAndRepairItemDOI,
+  type DOIRepairReport,
+} from "./DOICompleter";
+import { enrichSingleItem } from "./MetadataEnricher";
+import { runExclusive } from "./OperationGate";
 import {
   OAResolver,
   extractPdfUrlFromHtml,
@@ -14,6 +20,14 @@ class PDFNotFoundError extends Error {
     super(message);
     this.name = "PdfNotFoundError";
     Object.setPrototypeOf(this, PDFNotFoundError.prototype);
+  }
+}
+
+export class CaptchaBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CaptchaBlockedError";
+    Object.setPrototypeOf(this, CaptchaBlockedError.prototype);
   }
 }
 
@@ -56,15 +70,19 @@ export class SciHubFetcher {
       return;
     }
 
+    await runExclusive(() => this.runFetch(filtered));
+  }
+
+  private static async runFetch(filtered: Zotero.Item[]): Promise<void> {
     const state: FetchState = { cancelled: false, cancelRequest: undefined };
     // Do not retry a throttled host again in this batch.
     const throttledHosts = new Set<string>();
-    const email = (getPref("email") as string) || "";
+    const email = resolveEmail((getPref("email") as string) || "");
 
     for (const [itemIndex, item] of filtered.entries()) {
       if (state.cancelled) break;
 
-      await this.ensureValidDOI(item, email);
+      const doiReport = await this.ensureValidDOI(item, email);
       const dois = await Utils.extractDOIs(item);
       const arxivIds = await Utils.extractArXivIDs(item);
       if (!dois.length && !arxivIds.length) {
@@ -115,12 +133,7 @@ export class SciHubFetcher {
           }
           oaHadCandidates = candidates.length > 0;
           if (!state.cancelled) {
-            success = await this.tryOACandidates(
-              candidates,
-              item,
-              state,
-              win,
-            );
+            success = await this.tryOACandidates(candidates, item, state, win);
           }
         }
 
@@ -163,6 +176,30 @@ export class SciHubFetcher {
         success ? "success" : "fail",
         5000,
       );
+
+      // Fallback: If PDF was not available / failed and user enabled auto-enrichment,
+      // enrich item metadata & abstract from OpenAlex/Crossref.
+      if (
+        !success &&
+        !state.cancelled &&
+        getPref("autoEnrichMetadata") !== false
+      ) {
+        try {
+          const enrichReport = await enrichSingleItem(item, email, doiReport);
+          if (enrichReport.outcome === "enriched") {
+            Utils.showPopWin(
+              getString("popwin-fallback-enriched"),
+              `${item.getDisplayTitle()} → +${enrichReport.updatedFields.join(", ")}`,
+              "success",
+              4000,
+            );
+          }
+        } catch (enrichErr) {
+          Zotero.debug(
+            `[Sci-PDF] Fallback metadata enrichment error: ${String(enrichErr)}`,
+          );
+        }
+      }
     }
   }
 
@@ -183,9 +220,9 @@ export class SciHubFetcher {
   private static async ensureValidDOI(
     item: Zotero.Item,
     email: string,
-  ): Promise<void> {
+  ): Promise<DOIRepairReport | undefined> {
     if (getPref("completeDOI") === false) {
-      return;
+      return undefined;
     }
     try {
       const report = await verifyAndRepairItemDOI(item, email);
@@ -206,8 +243,10 @@ export class SciHubFetcher {
           "success",
         );
       }
+      return report;
     } catch (error) {
       Zotero.debug(`[Sci-PDF] failed to ensure valid DOI: ${String(error)}`);
+      return undefined;
     }
   }
 
@@ -267,7 +306,7 @@ export class SciHubFetcher {
       headers: { "User-Agent": this.userAgent },
     });
     state.cancelRequest = undefined;
-    if (xhr.status !== 200) {
+    if (xhr.status < 200 || xhr.status >= 300) {
       throw Object.assign(new Error(`HTTP ${xhr.status} ${xhr.statusText}`), {
         status: xhr.status,
       });
@@ -318,8 +357,21 @@ export class SciHubFetcher {
       } catch (error) {
         if (state.cancelled) break;
         const status = (error as { status?: number } | null)?.status;
-        if (status === 429 || status === 503)
+        const isCaptcha = error instanceof CaptchaBlockedError;
+        // Status 0 (network/DNS unreachable), 403 (Cloudflare block), 429 (rate-limit),
+        // 503 (service unavailable), or CAPTCHA challenge: throttle mirror for rest of batch.
+        if (
+          status === 0 ||
+          status === 403 ||
+          status === 429 ||
+          status === 503 ||
+          isCaptcha
+        ) {
           throttledHosts.add(scihubUrl.host);
+          Zotero.debug(
+            `[Sci-PDF] Mirror ${scihubUrl.host} throttled/blocked for current batch (status: ${status}, captcha: ${isCaptcha})`,
+          );
+        }
         allNotFound &&= error instanceof PDFNotFoundError;
         Zotero.debug(`[Sci-PDF] ${scihubUrl.href}: ${String(error)}`);
       } finally {
@@ -360,6 +412,79 @@ export class SciHubFetcher {
     });
   }
 
+  private static isCaptchaChallenge(html?: string): boolean {
+    if (!html) return false;
+    return (
+      html.includes("altcha-widget") ||
+      html.includes("challengeurl=") ||
+      html.includes('id="isrobot"') ||
+      html.includes("altcha.min.js") ||
+      html.includes('action="/captcha') ||
+      html.includes("g-recaptcha") ||
+      html.includes("cf-challenge") ||
+      html.includes("challenges.cloudflare.com")
+    );
+  }
+
+  private static extractSciHubPdfUrl(doc: Document | null): string | null {
+    if (!doc || typeof doc.querySelector !== "function") return null;
+
+    // 1. #pdf element src
+    try {
+      const elPdf = doc.querySelector("#pdf");
+      if (elPdf && typeof elPdf.getAttribute === "function") {
+        const src = elPdf.getAttribute("src");
+        if (src && src.trim()) return src.trim();
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. embed/iframe with application/pdf or .pdf in src
+    try {
+      const embedPdf = doc.querySelector(
+        "embed[type='application/pdf'], embed[src*='.pdf'], iframe[src*='.pdf']",
+      );
+      if (embedPdf && typeof embedPdf.getAttribute === "function") {
+        const src = embedPdf.getAttribute("src");
+        if (src && src.trim()) return src.trim();
+      }
+    } catch {
+      // ignore
+    }
+
+    // 3. Download button with onclick="location.href='//...pdf'" or similar
+    try {
+      const btn = doc.querySelector(
+        "#buttons button[onclick*='location.href'], #buttons button[onclick*='.pdf']",
+      );
+      if (btn && typeof btn.getAttribute === "function") {
+        const onclick = btn.getAttribute("onclick") || "";
+        const match =
+          onclick.match(/location\.href\s*=\s*['"]([^'"]+)['"]/i) ||
+          onclick.match(/['"](https?:)?\/\/[^'"]+\.pdf[^'"]*['"]/i);
+        if (match && match[1]) return match[1].trim();
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. Download link inside #buttons or main container
+    try {
+      const link = doc.querySelector(
+        "#buttons a[href*='.pdf'], a[href*='/downloads/'], a[href*='download=true']",
+      );
+      if (link && typeof link.getAttribute === "function") {
+        const href = link.getAttribute("href");
+        if (href && href.trim()) return href.trim();
+      }
+    } catch {
+      // ignore
+    }
+
+    return null;
+  }
+
   private static async fetchPDF(
     scihubUrl: URL,
     item: Zotero.Item,
@@ -376,8 +501,7 @@ export class SciHubFetcher {
         if (state.cancelled) cancel();
       },
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 11_3_1 like Mac OS X) AppleWebKit/603.1.30 (KHTML, like Gecko) Version/10.0 Mobile/14E304 Safari/602.1",
+        "User-Agent": this.userAgent,
       },
     });
     state.cancelRequest = undefined;
@@ -387,23 +511,35 @@ export class SciHubFetcher {
         status: xhr.status,
       });
     }
-    const rawPDFUrl = xhr.responseXML
-      ?.querySelector("#pdf")
-      ?.getAttribute("src");
-    const body = xhr.responseXML?.querySelector("body");
 
-    if (xhr.status === 200 && rawPDFUrl) {
+    const doc = xhr.responseXML as Document | null;
+    const htmlText = String(
+      doc?.documentElement?.innerHTML || xhr.responseText || "",
+    );
+
+    if (this.isCaptchaChallenge(htmlText)) {
+      throw new CaptchaBlockedError(
+        `Sci-Hub mirror ${scihubUrl.host} returned a CAPTCHA / bot challenge`,
+      );
+    }
+
+    const rawPDFUrl = this.extractSciHubPdfUrl(doc);
+    const body = doc?.querySelector("body");
+
+    if (rawPDFUrl) {
       // new URL() handles absolute, protocol-relative, root-relative,
       // and relative paths correctly using scihubUrl as the base.
       const pdfUrl = new URL(rawPDFUrl, scihubUrl.href);
-      pdfUrl.protocol = "https:";
+      if (pdfUrl.protocol === "http:" || !pdfUrl.protocol) {
+        pdfUrl.protocol = "https:";
+      }
       await Utils.attachRemotePDF(pdfUrl, item);
-    } else if (xhr.status === 200 && this.pdfNotAvailable(body)) {
+    } else if (this.pdfNotAvailable(body)) {
       ztoolkit.log(`scihub: PDF is not available at the moment "${scihubUrl}"`);
       throw new PDFNotFoundError(`PDF is not available: ${scihubUrl}`);
     } else {
       ztoolkit.log(`scihub: failed to fetch PDF from "${scihubUrl}"`);
-      throw new Error(xhr.statusText);
+      throw new Error(xhr.statusText || "No PDF found in mirror markup");
     }
   }
 

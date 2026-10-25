@@ -4,6 +4,7 @@
 // @ts-nocheck
 export type FluentMessageId =
   | 'collectionmenuitem-fetch'
+  | 'menuitem-enrichmetadata'
   | 'menuitem-fetch'
   | 'menuitem-verifydoi'
   | 'menutoolsitem-fetchall'
@@ -18,6 +19,10 @@ export type FluentMessageId =
   | 'popwin-doirepairsummary'
   | 'popwin-doiverified'
   | 'popwin-doiverifying'
+  | 'popwin-enriched'
+  | 'popwin-enriching'
+  | 'popwin-enrichsummary'
+  | 'popwin-fallback-enriched'
   | 'popwin-fetchfailed'
   | 'popwin-fetching'
   | 'popwin-fetchprogress'
@@ -28,6 +33,7 @@ export type FluentMessageId =
   | 'popwin-unknownerrorclick'
   | 'pref-arxiv'
   | 'pref-autoDownload'
+  | 'pref-autoenrichmetadata'
   | 'pref-completedoi'
   | 'pref-email-input'
   | 'pref-help'

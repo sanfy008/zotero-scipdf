@@ -45,7 +45,13 @@ export class Utils {
     };
 
     const extractFromItem = (it: Zotero.Item) => {
-      for (const field of ["DOI", "url", "title", "extra", "publicationTitle"] as const) {
+      for (const field of [
+        "DOI",
+        "url",
+        "title",
+        "extra",
+        "publicationTitle",
+      ] as const) {
         try {
           const value = it.getField(field as any);
           if (value && typeof value === "string") {

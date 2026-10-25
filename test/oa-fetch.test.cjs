@@ -29,6 +29,8 @@ const realOA = load("../src/modules/OAResolver.ts", {
   "./DOICompleter": {
     titleSimilarity: () => 1,
     TITLE_SIMILARITY_THRESHOLD: 0.9,
+    resolveEmail: (email) => email || "",
+    verifyAndRepairItemDOI: async () => ({ outcome: "skipped" }),
   },
 });
 
@@ -92,10 +94,18 @@ function harness({
           return true; // unpaywall / semanticScholar / openAlex
         },
       },
+      "./OperationGate": {
+        runExclusive: async (task) => {
+          await task();
+          return true;
+        },
+      },
       "./DOICompleter": {
         findDOI: async () => null,
         doiExists: async () => true,
         formatArXivDOI: (id) => `10.48550/arXiv.${id}`,
+        resolveEmail: (email) => email || "",
+        verifyAndRepairItemDOI: async () => ({ outcome: "skipped" }),
       },
       "./OAResolver": {
         OAResolver: { resolve: async () => candidates },

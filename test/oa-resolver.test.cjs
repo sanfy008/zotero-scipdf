@@ -32,6 +32,7 @@ const {
   "./DOICompleter": {
     titleSimilarity: (a, b) => (a.toLowerCase() === b.toLowerCase() ? 1 : 0),
     TITLE_SIMILARITY_THRESHOLD: 0.9,
+    resolveEmail: (email) => email || "",
   },
 });
 
@@ -60,14 +61,27 @@ test("parseUnpaywall surfaces best_oa_location pdf and landing", () => {
 });
 
 test("parseUnpaywall tolerates a closed record with no locations", () => {
-  assert.deepEqual(j(parseUnpaywall({ is_oa: false, best_oa_location: null })), []);
+  assert.deepEqual(
+    j(parseUnpaywall({ is_oa: false, best_oa_location: null })),
+    [],
+  );
   assert.deepEqual(j(parseUnpaywall(null)), []);
 });
 
 test("parseSemanticScholar reads openAccessPdf.url", () => {
   assert.deepEqual(
-    j(parseSemanticScholar({ openAccessPdf: { url: "https://s2.example/x.pdf" } })),
-    [{ url: "https://s2.example/x.pdf", kind: "pdf", source: "Semantic Scholar" }],
+    j(
+      parseSemanticScholar({
+        openAccessPdf: { url: "https://s2.example/x.pdf" },
+      }),
+    ),
+    [
+      {
+        url: "https://s2.example/x.pdf",
+        kind: "pdf",
+        source: "Semantic Scholar",
+      },
+    ],
   );
   assert.deepEqual(j(parseSemanticScholar({ openAccessPdf: null })), []);
 });
@@ -103,7 +117,10 @@ test("parseArXivFeed extracts entries and maps to direct PDF", () => {
     <link title="pdf" href="http://arxiv.org/pdf/1105.2152v1" rel="related" type="application/pdf"/>
   </entry>
 </feed>`;
-  const out = parseArXivFeed(xml, "How simple rules determine pedestrian behavior and crowd disasters");
+  const out = parseArXivFeed(
+    xml,
+    "How simple rules determine pedestrian behavior and crowd disasters",
+  );
   assert.equal(out.length, 1);
   assert.equal(out[0].url, "https://arxiv.org/pdf/1105.2152v1.pdf");
   assert.equal(out[0].source, "arXiv (Preprint)");
@@ -173,8 +190,20 @@ test("extractPdfUrlFromHtml falls back to an application/pdf link", () => {
 
 test("extractPdfUrlFromHtml returns null when no PDF hint is present", () => {
   assert.equal(
-    extractPdfUrlFromHtml("<html><body>no pdf here</body></html>", "https://x/"),
+    extractPdfUrlFromHtml(
+      "<html><body>no pdf here</body></html>",
+      "https://x/",
+    ),
     null,
   );
   assert.equal(extractPdfUrlFromHtml("", "https://x/"), null);
+});
+
+test("orderCandidates de-duplicates URLs case-insensitively", () => {
+  const out = orderCandidates([
+    { url: "https://Repo.Example/a.pdf", kind: "pdf", source: "A" },
+    { url: "https://repo.example/a.pdf", kind: "pdf", source: "B" },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, "A");
 });

@@ -9,12 +9,11 @@
     "48": "content/icons/sci-hub-logo.svg",
     "96": "content/icons/sci-hub-logo.svg"
   },
-  "applications": {
+  "browser_specific_settings": {
     "zotero": {
       "id": "__addonID__",
-      "update_url": "__updateURL__",
       "strict_min_version": "6.999",
-      "strict_max_version": "10.*"
+      "strict_max_version": "15.*"
     }
   }
 }

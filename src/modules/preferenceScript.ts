@@ -25,6 +25,7 @@ export async function registerPrefsScripts(_window: Window) {
   const semanticScholarCheckbox = byId<XUL.Checkbox>("semanticScholar");
   const arxivCheckbox = byId<XUL.Checkbox>("arxiv");
   const completeDOICheckbox = byId<XUL.Checkbox>("completeDOI");
+  const autoEnrichMetadataCheckbox = byId<XUL.Checkbox>("autoEnrichMetadata");
   const scihubEnabledCheckbox = byId<XUL.Checkbox>("scihubEnabled");
   const emailInput = byId<HTMLInputElement>("email");
   const urlInput = byId<HTMLInputElement>("scihubUrl");
@@ -45,6 +46,8 @@ export async function registerPrefsScripts(_window: Window) {
   scihubEnabledCheckbox.checked = getPref("scihubEnabled") === true;
   // Missing-DOI completion is opt-out: enabled unless the user turned it off.
   completeDOICheckbox.checked = getPref("completeDOI") !== false;
+  // Fallback metadata enrichment is opt-out: enabled unless the user turned it off.
+  autoEnrichMetadataCheckbox.checked = getPref("autoEnrichMetadata") !== false;
   emailInput.value = getPref("email") || "";
   urlInput.value = sciHubResolvers.map((e) => e.url).join(",");
 
@@ -96,6 +99,9 @@ export async function registerPrefsScripts(_window: Window) {
   });
   completeDOICheckbox.addEventListener("command", () => {
     setPref("completeDOI", completeDOICheckbox.checked);
+  });
+  autoEnrichMetadataCheckbox.addEventListener("command", () => {
+    setPref("autoEnrichMetadata", autoEnrichMetadataCheckbox.checked);
   });
   emailInput.addEventListener("change", rebuildResolvers);
   urlInput.addEventListener("change", rebuildResolvers);
