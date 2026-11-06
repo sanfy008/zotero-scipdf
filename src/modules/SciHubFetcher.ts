@@ -5,6 +5,7 @@ import { CustomResolverManager } from "./CustomResolverManager";
 import {
   resolveEmail,
   verifyAndRepairItemDOI,
+  isDOIRejected,
   type DOIRepairReport,
 } from "./DOICompleter";
 import { enrichSingleItem } from "./MetadataEnricher";
@@ -95,16 +96,28 @@ export class SciHubFetcher {
       if (state.cancelled) break;
 
       const doiReport = await this.ensureValidDOI(item, email);
+      const doiRejected = isDOIRejected(doiReport);
 
       // Reuse a PDF that is already in the library instead of downloading and
-      // storing a second copy of the same file.
-      if (localIndex && (await this.reuseLocalPDF(item, localIndex, state))) {
+      // storing a second copy of the same file. Never match on a rejected DOI.
+      if (
+        !doiRejected &&
+        localIndex &&
+        (await this.reuseLocalPDF(item, localIndex, state))
+      ) {
         continue;
       }
 
-      const dois = await Utils.extractDOIs(item);
+      const dois = doiRejected ? [] : await Utils.extractDOIs(item);
       const arxivIds = await Utils.extractArXivIDs(item);
-      if (!dois.length && !arxivIds.length) {
+      const itemTitle = item.getField("title") || "";
+      // Without any identifier, an arXiv title search and the metadata fallback
+      // can still help; only a title-less item has nothing to work with.
+      const canSearchByTitle =
+        !doiRejected &&
+        Boolean(itemTitle.trim()) &&
+        (getPref("arxiv") !== false || getPref("autoEnrichMetadata") !== false);
+      if (!dois.length && !arxivIds.length && !canSearchByTitle) {
         Utils.showPopWin(
           getString("popwin-doimissing"),
           item.getDisplayTitle(),
@@ -139,7 +152,6 @@ export class SciHubFetcher {
           let candidates: OACandidate[] = [];
           const targetDoi = dois.length > 0 ? dois[0] : "";
           const targetArxiv = arxivIds.length > 0 ? arxivIds[0] : null;
-          const itemTitle = item.getField("title") || null;
           try {
             candidates = await OAResolver.resolve(
               targetDoi,
@@ -157,7 +169,12 @@ export class SciHubFetcher {
         }
 
         // 2) Sci-Hub fallback — opt-in only (unreliable / often blocked).
-        if (!success && !state.cancelled && getPref("scihubEnabled") === true) {
+        if (
+          !success &&
+          !state.cancelled &&
+          !doiRejected &&
+          getPref("scihubEnabled") === true
+        ) {
           sciHubRan = true;
           const result = await this.fetchViaSciHub(
             item,

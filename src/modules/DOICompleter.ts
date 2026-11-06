@@ -62,6 +62,15 @@ export interface DOIRepairReport {
   message?: string;
 }
 
+// Only an explicit negative verification blocks lookup. A repaired DOI remains
+// usable even when its report describes the old value as mismatched/not_found.
+export function isDOIRejected(report?: DOIRepairReport): boolean {
+  return (
+    report?.outcome === "unresolved" &&
+    (report.detail === "mismatched" || report.detail === "not_found")
+  );
+}
+
 // A candidate needs at least this normalized-title similarity to be considered.
 export const TITLE_SIMILARITY_THRESHOLD = 0.9;
 // When neither year nor author can corroborate the match, demand a near-exact
@@ -136,78 +145,73 @@ export function formatArXivDOI(arxivId: string): string {
   return `10.48550/arXiv.${clean}`;
 }
 
+// Shared identity guard for DOI selection and title-based metadata lookup.
+// A candidate need not have a DOI to provide trustworthy metadata.
+export function matchCandidateIdentity(
+  query: DOIQuery,
+  candidate: CrossrefCandidate,
+): number | null {
+  const candidateTitle = candidate.title?.[0];
+  if (!candidateTitle) return null;
+  const wantedSurname = query.authorSurname?.toLowerCase().trim() || null;
+  let similarity = titleSimilarity(query.title, candidateTitle);
+
+  const candYear = candidateYear(candidate);
+  const yearKnown = query.year != null && candYear != null;
+  const sameYear =
+    yearKnown &&
+    Math.abs((query.year as number) - (candYear as number)) <= YEAR_TOLERANCE;
+
+  const surnames = candidateSurnames(candidate);
+  const authorKnown = wantedSurname != null && surnames.length > 0;
+  const authorMatches =
+    authorKnown &&
+    surnames.some(
+      (s) => s.includes(wantedSurname) || wantedSurname.includes(s),
+    );
+
+  // Subtitle tolerance requires independent year and author corroboration.
+  if (similarity < TITLE_SIMILARITY_THRESHOLD && sameYear && authorMatches) {
+    const queryMain = query.title.split(/[:\-–—?]/)[0].trim();
+    const candMain = candidateTitle.split(/[:\-–—?]/)[0].trim();
+    if (queryMain.length >= 10 && candMain.length >= 10) {
+      const mainSim = titleSimilarity(queryMain, candMain);
+      if (mainSim >= 0.95) {
+        similarity = Math.max(similarity, TITLE_SIMILARITY_THRESHOLD);
+      }
+    }
+  }
+
+  if (similarity < TITLE_SIMILARITY_THRESHOLD) return null;
+  if (yearKnown && !sameYear) return null;
+  if (authorKnown && !authorMatches) return null;
+  if (
+    !yearKnown &&
+    !authorKnown &&
+    similarity < STRICT_TITLE_SIMILARITY_THRESHOLD
+  ) {
+    return null;
+  }
+  return similarity;
+}
+
 // Picks the best-matching candidate that clears every applicable guard, or null
 // when none is trustworthy enough to write back.
 export function selectBestDOI(
   query: DOIQuery,
   candidates: CrossrefCandidate[],
 ): DOIMatch | null {
-  const wantedSurname = query.authorSurname?.toLowerCase().trim() || null;
   let best: DOIMatch | null = null;
-
   for (const candidate of candidates) {
     const rawDoi = candidate.DOI?.trim();
-    const candidateTitle = candidate.title?.[0];
-    if (!rawDoi || !candidateTitle) continue;
+    if (!rawDoi) continue;
+    const similarity = matchCandidateIdentity(query, candidate);
+    if (similarity == null) continue;
     const doi = cleanDOI(rawDoi);
-
-    let similarity = titleSimilarity(query.title, candidateTitle);
-
-    const candYear = candidateYear(candidate);
-    const yearKnown = query.year != null && candYear != null;
-    const sameYear =
-      yearKnown &&
-      Math.abs((query.year as number) - (candYear as number)) <= YEAR_TOLERANCE;
-
-    const surnames = candidateSurnames(candidate);
-    const authorKnown = wantedSurname != null && surnames.length > 0;
-    const authorMatches =
-      authorKnown &&
-      surnames.some(
-        (s) => s.includes(wantedSurname) || wantedSurname.includes(s),
-      );
-
-    // If full title similarity is below threshold (e.g. subtitle omitted),
-    // check if the primary title matches with high similarity when year and author strictly match.
-    if (similarity < TITLE_SIMILARITY_THRESHOLD && sameYear && authorMatches) {
-      const queryMain = query.title.split(/[:\-–—?]/)[0].trim();
-      const candMain = candidateTitle.split(/[:\-–—?]/)[0].trim();
-      if (queryMain.length >= 10 && candMain.length >= 10) {
-        const mainSim = titleSimilarity(queryMain, candMain);
-        if (mainSim >= 0.95) {
-          similarity = Math.max(similarity, TITLE_SIMILARITY_THRESHOLD);
-        }
-      }
-    }
-
-    if (similarity < TITLE_SIMILARITY_THRESHOLD) continue;
-
-    if (
-      yearKnown &&
-      Math.abs((query.year as number) - (candYear as number)) > YEAR_TOLERANCE
-    ) {
-      continue;
-    }
-
-    if (authorKnown && !authorMatches) {
-      continue;
-    }
-
-    // Title alone is a weak signal; require a near-exact match when we cannot
-    // corroborate with either year or author.
-    if (
-      !yearKnown &&
-      !authorKnown &&
-      similarity < STRICT_TITLE_SIMILARITY_THRESHOLD
-    ) {
-      continue;
-    }
-
     if (!best || similarity > best.similarity) {
       best = { doi, similarity, source: candidate.source };
     }
   }
-
   return best;
 }
 
@@ -567,8 +571,31 @@ export async function verifyDOI(
       : sim;
   const effectiveSim = Math.max(sim, mainSim >= 0.9 ? 0.9 : 0);
 
+  // Known year/author contradictions must be checked before any title or
+  // subtitle fast-path, including an exact title match.
+  const wantedSurname = expectedAuthorSurname?.toLowerCase().trim() || null;
+  const candYear = metadata.year;
+  const yearMatch =
+    expectedYear != null && candYear != null
+      ? Math.abs(expectedYear - candYear) <= YEAR_TOLERANCE
+      : true;
+  const authorMatch =
+    wantedSurname && metadata.authors && metadata.authors.length > 0
+      ? metadata.authors.some(
+          (a) =>
+            a.toLowerCase().includes(wantedSurname) ||
+            wantedSurname.includes(a.toLowerCase()),
+        )
+      : true;
+  const hardContradiction =
+    (expectedYear != null && candYear != null && !yearMatch) ||
+    (wantedSurname != null &&
+      metadata.authors != null &&
+      metadata.authors.length > 0 &&
+      !authorMatch);
+
   // Match check
-  if (effectiveSim >= 0.75) {
+  if (!hardContradiction && effectiveSim >= 0.75) {
     return {
       status: "valid",
       doi: clean,
@@ -592,22 +619,7 @@ export async function verifyDOI(
     };
   }
 
-  // Borderline similarity: check year and author
-  const wantedSurname = expectedAuthorSurname?.toLowerCase().trim() || null;
-  const candYear = metadata.year;
-  const yearMatch =
-    expectedYear != null && candYear != null
-      ? Math.abs(expectedYear - candYear) <= YEAR_TOLERANCE
-      : true;
-  const authorMatch =
-    wantedSurname && metadata.authors && metadata.authors.length > 0
-      ? metadata.authors.some(
-          (a) =>
-            a.toLowerCase().includes(wantedSurname) ||
-            wantedSurname.includes(a.toLowerCase()),
-        )
-      : true;
-
+  // Borderline similarity: require year and author to agree when known.
   if (yearMatch && authorMatch && effectiveSim >= 0.65) {
     return {
       status: "valid",
@@ -619,16 +631,8 @@ export async function verifyDOI(
     };
   }
 
-  // Borderline title, but the year or the author disagrees outright. A genuine
-  // mismatch has at least one hard contradiction; a title difference alone
-  // (preprint vs. published, translated title, dropped subtitle) does not.
-  // Stay `unverified` so the caller never rewrites a DOI on title alone.
-  const hardContradiction =
-    (expectedYear != null && candYear != null && !yearMatch) ||
-    (wantedSurname != null &&
-      metadata.authors != null &&
-      metadata.authors.length > 0 &&
-      !authorMatch);
+  // A title difference alone (preprint vs. published, translated title,
+  // dropped subtitle) is not enough to authorize a rewrite.
   if (!hardContradiction && effectiveSim >= 0.6) {
     return {
       status: "unverified",
@@ -649,6 +653,36 @@ export async function verifyDOI(
     registeredYear: metadata.year,
     registeredAuthors: metadata.authors,
     message: `DOI belongs to another paper: "${regTitle}"`,
+  };
+}
+
+// Read-only DOI inspection for metadata-only operations. It shares the same
+// verifier and caches, but never repairs fields, adds tags, or saves the item.
+export async function inspectItemDOI(
+  item: Zotero.Item,
+  email = "",
+): Promise<DOIRepairReport> {
+  const query = buildQuery(item);
+  if (!query) return { outcome: "skipped", message: "Item has no title" };
+  const [rawDOI] = await Utils.extractDOIs(item);
+  if (!rawDOI) return { outcome: "unresolved", detail: "missing" };
+  const doi = cleanDOI(rawDOI);
+  const verification = await verifyDOI(
+    doi,
+    query.title,
+    query.year,
+    query.authorSurname,
+    email,
+  );
+  if (verification.status === "valid") {
+    return { outcome: "valid", oldDOI: doi, newDOI: doi };
+  }
+  return {
+    outcome: "unresolved",
+    oldDOI: doi,
+    detail:
+      verification.status === "unverified" ? undefined : verification.status,
+    message: verification.message,
   };
 }
 
@@ -955,22 +989,10 @@ export async function verifyAndRepairItemDOI(
   // 2. Item HAS an existing DOI: perform bidirectional verification
   const currentDOI = cleanDOI(existingDOIs[0]);
 
-  // Fast-path, but only when the cached tag pins the exact DOI that is on the
-  // item right now. A bare `_doi_verified` (written by older versions) is
-  // deliberately ignored: if the DOI was later edited back to a wrong value,
-  // that stale tag must not keep vouching for it.
+  // Persistent tags are audit hints, not proof for a mutable item. Always
+  // evaluate its current title/year/author, including tags written by older
+  // verification policies. Registry/metadata caches keep repeated checks cheap.
   const verifiedTag = `_doi_verified:${currentDOI.toLowerCase()}`;
-  if (
-    typeof (item as any).hasTag === "function" &&
-    (item as any).hasTag(verifiedTag)
-  ) {
-    return {
-      outcome: "valid",
-      oldDOI: currentDOI,
-      newDOI: currentDOI,
-      message: "DOI already verified and tagged (fast-path)",
-    };
-  }
 
   const verification = await verifyDOI(
     currentDOI,

@@ -80,10 +80,7 @@ export async function registerPrefsScripts(_window: Window) {
     }
     urlInput.value = normalizedURLs.join(",");
 
-    CustomResolverManager.shared.removeAllCustomResolversInZotero();
-    if (next.length > 0) {
-      CustomResolverManager.shared.appendCustomResolversInZotero(next);
-    }
+    CustomResolverManager.shared.replaceCustomResolversInZotero(next);
   };
 
   autoDownloadCheckbox.addEventListener("command", rebuildResolvers);
@@ -99,6 +96,11 @@ export async function registerPrefsScripts(_window: Window) {
   });
   scihubEnabledCheckbox.addEventListener("command", () => {
     setPref("scihubEnabled", scihubEnabledCheckbox.checked);
+    // Apply immediately: Zotero's own "Find Available PDF" and automatic
+    // downloads read findPDFs.resolvers, not this plugin's preference.
+    CustomResolverManager.shared.replaceCustomResolversInZotero(
+      CustomResolverManager.shared.customResolvers,
+    );
   });
   reuseLocalPDFCheckbox.addEventListener("command", () => {
     setPref("reuseLocalPDF", reuseLocalPDFCheckbox.checked);

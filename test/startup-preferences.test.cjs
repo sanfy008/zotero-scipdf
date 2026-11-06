@@ -47,7 +47,8 @@ async function start({ installed = true, saved = [], legacy = {} } = {}) {
         CustomResolverManager: {
           shared: {
             customResolvers: saved,
-            appendCustomResolversInZotero: (values) => appended.push(...values),
+            replaceCustomResolversInZotero: (values) =>
+              appended.push(...values),
           },
         },
       },

@@ -23,6 +23,11 @@ const identifiers = load("../src/utils/identifierPatterns.ts");
 const { Utils } = load("../src/utils/utils.ts", {
   "./identifierPatterns": identifiers,
 });
+const doiPolicy = load("../src/modules/DOICompleter.ts", {
+  "../utils/identifierPatterns": identifiers,
+  "../utils/utils": { Utils },
+  "../utils/constants": { API_USER_AGENT: "test" },
+});
 // Use the real landing-page extractor so the flow test exercises it end to end.
 const realOA = load("../src/modules/OAResolver.ts", {
   "../utils/prefs": { getPref: () => undefined },
@@ -101,6 +106,7 @@ function harness({
         },
       },
       "./DOICompleter": {
+        isDOIRejected: doiPolicy.isDOIRejected,
         findDOI: async () => null,
         doiExists: async () => true,
         formatArXivDOI: (id) => `10.48550/arXiv.${id}`,

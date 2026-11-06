@@ -1,5 +1,6 @@
 import { LargePrefHelper } from "zotero-plugin-toolkit";
 import { config } from "../../package.json";
+import { getPref } from "../utils/prefs";
 import { CustomResolver, isCustomResolverEqual } from "./CustomResolver";
 
 export class CustomResolverManager {
@@ -33,33 +34,46 @@ export class CustomResolverManager {
     this.prefs.setValue(CustomResolverManager.customResolversPrefKey, value);
   }
 
-  // system custom resolvers
+  // Keep configured mirrors separately from active Zotero resolvers: disabled
+  // sources remain editable, but cannot participate in manual or automatic PDF
+  // resolution. Only replace this plugin's entries; preserve other resolvers.
+  replaceCustomResolversInZotero(
+    resolvers: CustomResolver[] | Readonly<CustomResolver[]>,
+  ) {
+    const previous = this.customResolvers;
+    const configured: CustomResolver[] = [];
+    for (const resolver of resolvers) {
+      if (!configured.some((entry) => isCustomResolverEqual(entry, resolver))) {
+        configured.push(resolver);
+      }
+    }
+    const owned = [...previous, ...configured];
+    const preserved = this.customResolversInZotero.filter(
+      (entry) =>
+        !owned.some((resolver) => isCustomResolverEqual(entry, resolver)),
+    );
+    const sciHubEnabled = getPref("scihubEnabled") === true;
+    const active = configured.filter(
+      (resolver) => resolver.name !== "Sci-Hub" || sciHubEnabled,
+    );
+    this.customResolversInZotero = [...preserved, ...active];
+    this.customResolvers = configured;
+  }
+
   appendCustomResolversInZotero(
     resolvers: CustomResolver[] | Readonly<CustomResolver[]>,
   ) {
-    this.customResolversInZotero = this.customResolversInZotero.concat(
-      resolvers.filter(
-        (value) =>
-          this.customResolversInZotero.findIndex((e) =>
-            isCustomResolverEqual(e, value),
-          ) < 0,
-      ),
-    );
-    this.customResolvers = this.customResolvers.concat(
-      resolvers.filter(
-        (value) =>
-          this.customResolvers.findIndex((e) =>
-            isCustomResolverEqual(e, value),
-          ) < 0,
-      ),
-    );
+    this.replaceCustomResolversInZotero([
+      ...this.customResolvers,
+      ...resolvers,
+    ]);
   }
   removeCustomResolversInZotero(resolvers: CustomResolver[]) {
-    this.customResolversInZotero = this.customResolversInZotero.filter(
-      (value) => !resolvers.find((e) => isCustomResolverEqual(e, value)),
-    );
-    this.customResolvers = this.customResolvers.filter(
-      (value) => !resolvers.find((e) => isCustomResolverEqual(e, value)),
+    this.replaceCustomResolversInZotero(
+      this.customResolvers.filter(
+        (entry) =>
+          !resolvers.some((resolver) => isCustomResolverEqual(entry, resolver)),
+      ),
     );
   }
   removeAllCustomResolversInZotero() {

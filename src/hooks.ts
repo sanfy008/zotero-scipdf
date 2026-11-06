@@ -35,10 +35,11 @@ async function onStartup() {
     } else {
       resolvers.push(...presetSciHubCustomResolvers(true));
     }
-    CustomResolverManager.shared.appendCustomResolversInZotero(resolvers);
+    CustomResolverManager.shared.replaceCustomResolversInZotero(resolvers);
   } else {
-    // Restore saved choices without re-adding defaults or enabling downloads.
-    CustomResolverManager.shared.appendCustomResolversInZotero(
+    // Reconcile saved choices with the current Sci-Hub opt-in, preserving
+    // resolvers the user added independently of this plugin.
+    CustomResolverManager.shared.replaceCustomResolversInZotero(
       CustomResolverManager.shared.customResolvers,
     );
   }

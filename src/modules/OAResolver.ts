@@ -147,20 +147,30 @@ export function parseArXivFeed(
   return out;
 }
 
-// Direct-PDF candidates first (they need no scraping), then landing pages.
-// De-duplicate by URL — case-insensitively, since hosts are case-insensitive and
-// the same repository often appears with mixed casing across sources.
+function candidateURLKey(url: string): string {
+  try {
+    // URL normalizes scheme/host case without changing case-sensitive paths.
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+// Prioritize PDFs before deduplication, so a landing-page interpretation cannot
+// hide a later direct PDF for the same URL. Preserve source order within a kind.
 export function orderCandidates(candidates: OACandidate[]): OACandidate[] {
   const seen = new Set<string>();
-  const pdfs: OACandidate[] = [];
-  const landings: OACandidate[] = [];
-  for (const candidate of candidates) {
-    const key = candidate.url.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    (candidate.kind === "pdf" ? pdfs : landings).push(candidate);
+  const ordered: OACandidate[] = [];
+  for (const kind of ["pdf", "landing"] as const) {
+    for (const candidate of candidates) {
+      if (candidate.kind !== kind) continue;
+      const key = candidateURLKey(candidate.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(candidate);
+    }
   }
-  return [...pdfs, ...landings];
+  return ordered;
 }
 
 // Extract a PDF URL from a landing page's HTML. Publishers and repositories
