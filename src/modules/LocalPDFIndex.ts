@@ -139,6 +139,11 @@ export class LocalPDFIndex {
     const candidates: { entry: LocalIndexEntry; score: number }[] = [];
     for (const entry of this.entries) {
       if (entry.parent.id === item.id || !entry.filePath) continue;
+      // A similar title cannot override identifiers that name different works.
+      if (doi && entry.doi && doi !== entry.doi) continue;
+      if (arxivId && entry.arxivId && arxivId !== entry.arxivId.toLowerCase()) {
+        continue;
+      }
       const score = titleSimilarity(title, entry.title);
       if (score >= TITLE_SIMILARITY_THRESHOLD)
         candidates.push({ entry, score });

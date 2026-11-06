@@ -71,6 +71,7 @@ const enricherModule = loadModule(
   {
     "../utils/identifierPatterns": identifiers,
     "../utils/utils": { Utils },
+    "../utils/prefs": { getPref: () => true },
     "./DOICompleter": completerModule,
   },
   { Zotero: fakeZotero },
@@ -422,6 +423,7 @@ test("fetchUnifiedMetadata cascades and short-circuits when OpenAlex metadata is
     {
       "../utils/identifierPatterns": identifiers,
       "../utils/utils": { Utils },
+      "../utils/prefs": { getPref: () => true },
       "./DOICompleter": completerWith(customZotero),
     },
     { Zotero: customZotero },
@@ -490,6 +492,7 @@ test("fetchUnifiedMetadata falls back to Crossref when OpenAlex is incomplete", 
     {
       "../utils/identifierPatterns": identifiers,
       "../utils/utils": { Utils },
+      "../utils/prefs": { getPref: () => true },
       "./DOICompleter": completerWith(customZotero),
     },
     { Zotero: customZotero },
@@ -565,6 +568,7 @@ test("a later enrichment is still audited in `extra`", async () => {
     {
       "../utils/identifierPatterns": identifiers,
       "../utils/utils": { Utils },
+      "../utils/prefs": { getPref: () => true },
       "./DOICompleter": completerModule,
     },
     { Zotero: fakeZotero },

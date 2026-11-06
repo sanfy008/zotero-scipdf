@@ -20,12 +20,30 @@ export function cleanDOI(doi: string): string {
   } catch {
     // ignore malformed URI component
   }
-  // Strip URL prefixes, doi: schemes, query parameters, hash fragments, and trailing punctuation
-  return clean
+  // Strip URL prefixes, query parameters and prose punctuation, but preserve
+  // balanced parentheses that are part of legitimate DOI suffixes (e.g. ASCE).
+  clean = clean
     .replace(/^(?:https?:\/\/(?:dx\.)?doi\.org\/|doi:\s*)/i, "")
     .replace(/[?#].*$/, "")
-    .replace(/[.,;:()[\]/\s]+$/, "")
     .trim();
+  let balance = 0;
+  for (const char of clean) {
+    if (char === "(") balance++;
+    else if (char === ")") balance--;
+  }
+  while (clean) {
+    const tail = clean[clean.length - 1];
+    if (tail === ")" && balance < 0) {
+      clean = clean.slice(0, -1);
+      balance++;
+    } else if (/[.,;:([\]/\s]/.test(tail)) {
+      clean = clean.slice(0, -1);
+      if (tail === "(") balance--;
+    } else {
+      break;
+    }
+  }
+  return clean;
 }
 
 export function matchDOIs(text: string): string[] {

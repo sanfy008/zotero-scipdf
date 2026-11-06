@@ -1,15 +1,14 @@
 import { cleanDOI } from "../utils/identifierPatterns";
 import { Utils } from "../utils/utils";
 import { API_USER_AGENT } from "../utils/constants";
+import { getPref } from "../utils/prefs";
 import {
   buildQuery,
   cleanQueryTitle,
-  itemFirstAuthorSurname,
-  itemYear,
-  recordDOIAudit,
+  inspectItemDOI,
   resolveEmail,
-  selectBestDOI,
-  titleSimilarity,
+  isDOIRejected,
+  matchCandidateIdentity,
   verifyAndRepairItemDOI,
   isOpenAlexSearchThrottled,
   throttleOpenAlexSearch,
@@ -521,6 +520,7 @@ export async function fetchUnifiedMetadata(
 export async function searchOpenAlexForMetadata(
   query: DOIQuery,
   email = "",
+  excludedDOI = "",
 ): Promise<WorkMetadata | null> {
   if (isOpenAlexSearchThrottled()) {
     return null;
@@ -558,6 +558,8 @@ export async function searchOpenAlexForMetadata(
     const results = (data as { results?: unknown[] })?.results;
     if (!Array.isArray(results) || results.length === 0) return null;
 
+    let bestMatch: WorkMetadata | null = null;
+    let bestSimilarity = -1;
     for (const item of results) {
       const it = item as {
         doi?: string;
@@ -579,11 +581,27 @@ export async function searchOpenAlexForMetadata(
 
       const title = it.title || it.display_name;
       if (!title) continue;
-
-      const sim = titleSimilarity(query.title, title);
-      if (sim < 0.85) continue;
-
       const cleanWorkDoi = it.doi ? cleanDOI(it.doi) : undefined;
+      // Negative verification evidence also applies to title-search results.
+      if (
+        excludedDOI &&
+        cleanWorkDoi?.toLowerCase() === cleanDOI(excludedDOI).toLowerCase()
+      ) {
+        continue;
+      }
+
+      const authors = (it.authorships || [])
+        .map((a) => a.author?.display_name || "")
+        .filter((s) => s.length > 0);
+      const similarity = matchCandidateIdentity(query, {
+        title: [title],
+        author: authors.map((name) => ({ name })),
+        issued:
+          typeof it.publication_year === "number"
+            ? { "date-parts": [[it.publication_year]] }
+            : undefined,
+      });
+      if (similarity == null || similarity <= bestSimilarity) continue;
       const abstract = reconstructOpenAlexAbstract(it.abstract_inverted_index);
       const publicationTitle =
         it.primary_location?.source?.display_name ||
@@ -602,11 +620,7 @@ export async function searchOpenAlexForMetadata(
         pages = it.biblio.first_page;
       }
 
-      const authors = (it.authorships || [])
-        .map((a) => a.author?.display_name || "")
-        .filter((s) => s.length > 0);
-
-      return {
+      bestMatch = {
         doi: cleanWorkDoi,
         title,
         authors,
@@ -621,7 +635,9 @@ export async function searchOpenAlexForMetadata(
         pages,
         source: "openalex",
       };
+      bestSimilarity = similarity;
     }
+    return bestMatch;
   } catch (error) {
     if (String(error).includes("429")) {
       throttleOpenAlexSearch(60000);
@@ -821,10 +837,18 @@ export async function enrichSingleItem(
     };
   }
 
-  // Step 1: Ensure valid and verified DOI (repairs hallucinated/mismatched/missing DOIs)
+  // Step 1: Resolve the DOI. Explicit repair stays opt-out; when disabled,
+  // enrichment only inspects the current value and never writes it.
   let targetDoi: string | null = null;
   const repairReport =
-    knownDOIReport ?? (await verifyAndRepairItemDOI(item, email));
+    knownDOIReport ??
+    (getPref("completeDOI") === false
+      ? await inspectItemDOI(item, email)
+      : await verifyAndRepairItemDOI(item, email));
+  const doiRejected = isDOIRejected(repairReport);
+  const rejectedDOI = doiRejected
+    ? cleanDOI(repairReport.oldDOI || String(item.getField("DOI") || ""))
+    : "";
   if (
     repairReport.outcome === "valid" ||
     repairReport.outcome === "repaired" ||
@@ -832,7 +856,9 @@ export async function enrichSingleItem(
   ) {
     targetDoi = repairReport.newDOI ? cleanDOI(repairReport.newDOI) : null;
   }
-  if (!targetDoi) {
+  // Preserve the original value on inconclusive checks, but never promote an
+  // explicitly rejected DOI back into a metadata query.
+  if (!targetDoi && !doiRejected) {
     const existingDOIs = await Utils.extractDOIs(item);
     if (existingDOIs.length > 0) {
       targetDoi = cleanDOI(existingDOIs[0]);
@@ -849,20 +875,9 @@ export async function enrichSingleItem(
   if (!metadata) {
     const query = buildQuery(item);
     if (query) {
-      metadata = await searchOpenAlexForMetadata(query, email);
-      if (metadata && metadata.doi && !targetDoi) {
-        // Write and save immediately. The fields below are saved only when at
-        // least one of them was filled; if the item already had every field
-        // populated, this DOI write would otherwise be dropped silently.
-        item.setField("DOI", metadata.doi);
-        recordDOIAudit(
-          item,
-          null,
-          metadata.doi,
-          "Matched during metadata enrichment",
-        );
-        await item.saveTx();
-      }
+      metadata = await searchOpenAlexForMetadata(query, email, rejectedDOI);
+      // The matched DOI is returned in the report but not written here: DOI
+      // changes belong to the explicit audit, never to metadata enrichment.
     }
   }
 
@@ -887,7 +902,7 @@ export async function enrichSingleItem(
     return {
       outcome: "enriched",
       itemTitle: displayTitle,
-      doi: targetDoi || metadata.doi,
+      doi: targetDoi || metadata.doi || undefined,
       updatedFields,
       hasAbstract,
       message: `Enriched ${updatedFields.join(", ")}`,
@@ -897,7 +912,7 @@ export async function enrichSingleItem(
   return {
     outcome: "already_complete",
     itemTitle: displayTitle,
-    doi: targetDoi || metadata.doi,
+    doi: targetDoi || metadata.doi || undefined,
     updatedFields: [],
     hasAbstract,
     message: "All fields already populated",
