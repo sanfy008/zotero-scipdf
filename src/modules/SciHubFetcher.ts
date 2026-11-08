@@ -72,7 +72,9 @@ export class SciHubFetcher {
       return;
     }
 
-    await runExclusive(() => this.runFetch(filtered));
+    await runExclusive(() => this.runFetch(filtered), {
+      label: getString("menuitem-fetch"),
+    });
   }
 
   private static async runFetch(filtered: Zotero.Item[]): Promise<void> {

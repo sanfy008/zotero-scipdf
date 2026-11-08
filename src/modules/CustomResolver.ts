@@ -19,6 +19,22 @@ export interface CustomResolver {
   };
 }
 
+/**
+ * A resolver belongs to the Sci-Hub family when it is named "Sci-Hub" or its
+ * URL points at a sci-hub.* host. Older plugin versions and manual edits leave
+ * such entries behind with URLs that no longer match the configured mirrors;
+ * the ownership heuristic alone cannot attribute them to this plugin.
+ */
+export function isSciHubResolver(resolver: {
+  name?: string;
+  url?: string;
+}): boolean {
+  if (resolver?.name === "Sci-Hub") {
+    return true;
+  }
+  return /(^|[./])sci-hub\.[a-z]/i.test(resolver?.url || "");
+}
+
 export function isCustomResolverEqual(a: CustomResolver, b: CustomResolver) {
   return (
     a.name === b.name &&

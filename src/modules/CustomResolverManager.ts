@@ -1,7 +1,11 @@
 import { LargePrefHelper } from "zotero-plugin-toolkit";
 import { config } from "../../package.json";
 import { getPref } from "../utils/prefs";
-import { CustomResolver, isCustomResolverEqual } from "./CustomResolver";
+import {
+  CustomResolver,
+  isCustomResolverEqual,
+  isSciHubResolver,
+} from "./CustomResolver";
 
 export class CustomResolverManager {
   private static _shared?: CustomResolverManager;
@@ -48,11 +52,19 @@ export class CustomResolverManager {
       }
     }
     const owned = [...previous, ...configured];
-    const preserved = this.customResolversInZotero.filter(
-      (entry) =>
-        !owned.some((resolver) => isCustomResolverEqual(entry, resolver)),
-    );
     const sciHubEnabled = getPref("scihubEnabled") === true;
+    const preserved = this.customResolversInZotero.filter((entry) => {
+      if (owned.some((resolver) => isCustomResolverEqual(entry, resolver))) {
+        return false;
+      }
+      // Disabling Sci-Hub must also silence legacy/renamed Sci-Hub entries
+      // this plugin did not configure. Otherwise Zotero's manual "Find
+      // Available PDF" can still reach a sci-hub.* host.
+      if (!sciHubEnabled && isSciHubResolver(entry)) {
+        return false;
+      }
+      return true;
+    });
     const active = configured.filter(
       (resolver) => resolver.name !== "Sci-Hub" || sciHubEnabled,
     );

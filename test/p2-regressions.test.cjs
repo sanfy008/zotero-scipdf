@@ -189,6 +189,65 @@ test("restart removes owned Sci-Hub resolvers when disabled without touching thi
   );
 });
 
+test("disabling Sci-Hub removes legacy Sci-Hub resolvers it never configured", async () => {
+  const { oa, sci, independent } = resolverFixtures(harness());
+  const legacyWf = {
+    name: "Sci-Hub",
+    method: "GET",
+    url: "https://sci-hub.wf/{doi}",
+    mode: "html",
+    selector: "#pdf",
+    attribute: "src",
+    automatic: false,
+  };
+  const h = harness({
+    realResolvers: true,
+    preferences: { firstInstall: true, scihubEnabled: false },
+    configuredResolvers: [oa, sci],
+    installedResolvers: [independent, legacyWf, oa, sci],
+  });
+  await h.load("src/hooks.ts").default.onStartup();
+
+  assert.deepEqual(
+    h.installedResolvers().map((r) => r.name),
+    ["Independent", "OpenAlex"],
+    "no Sci-Hub resolver may survive a disabled Sci-Hub setting",
+  );
+  assert.ok(
+    h
+      .load("src/modules/CustomResolverManager.ts")
+      .CustomResolverManager.shared.customResolvers.some(
+        (r) => r.name === "Sci-Hub",
+      ),
+    "configured mirrors stay available for re-enabling",
+  );
+});
+
+test("a renamed resolver pointing at a sci-hub host is treated as Sci-Hub", async () => {
+  const { oa, independent } = resolverFixtures(harness());
+  const disguised = {
+    name: "Custom Mirror",
+    method: "GET",
+    url: "https://sci-hub.ru/{doi}",
+    mode: "html",
+    selector: "#pdf",
+    attribute: "src",
+    automatic: false,
+  };
+  const h = harness({
+    realResolvers: true,
+    preferences: { firstInstall: true, scihubEnabled: false },
+    configuredResolvers: [oa],
+    installedResolvers: [independent, disguised, oa],
+  });
+  await h.load("src/hooks.ts").default.onStartup();
+
+  assert.deepEqual(
+    h.installedResolvers().map((r) => r.name),
+    ["Independent", "OpenAlex"],
+  );
+});
+
 test("the preferences Sci-Hub toggle immediately updates built-in resolvers", async () => {
   const h = harness({
     realResolvers: true,
