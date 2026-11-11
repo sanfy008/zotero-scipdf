@@ -17,9 +17,12 @@
 // candidate is nearly as good, the match is rejected rather than guessed.
 import { cleanDOI } from "../utils/identifierPatterns";
 import {
+  itemFirstAuthorSurname,
+  itemYear,
   normalizeTitle,
   titleSimilarity,
   TITLE_SIMILARITY_THRESHOLD,
+  YEAR_TOLERANCE,
 } from "./DOICompleter";
 
 export interface LocalPDFMatch {
@@ -48,7 +51,6 @@ export interface LocalIndexEntry {
 export class LocalPDFIndex {
   private byDoi = new Map<string, LocalIndexEntry[]>();
   private byArxiv = new Map<string, LocalIndexEntry[]>();
-  private byTitle = new Map<string, LocalIndexEntry[]>();
   private entries: LocalIndexEntry[] = [];
 
   static async build(libraryID: number): Promise<LocalPDFIndex> {
@@ -61,7 +63,7 @@ export class LocalPDFIndex {
       for (const attachmentID of parent.getAttachments()) {
         const attachment = Zotero.Items.get(attachmentID);
         if (!attachment || attachment.deleted) continue;
-        if (!attachment.isPDFAttachment()) continue;
+        if (!attachment.isPDFAttachment() || isSupplement(attachment)) continue;
         index.add(parent, attachment);
       }
     }
@@ -94,8 +96,6 @@ export class LocalPDFIndex {
     };
     push(this.byDoi, doi);
     push(this.byArxiv, arxivId?.toLowerCase());
-    const normalized = normalizeTitle(title);
-    if (normalized) push(this.byTitle, normalized);
   }
 
   get size(): number {
@@ -106,7 +106,26 @@ export class LocalPDFIndex {
    * Finds the best existing PDF for `item` (which should have no attachment of
    * its own), or null. Candidates owned by `item` itself are excluded.
    */
-  find(item: Zotero.Item): LocalPDFMatch | null {
+  async findAvailable(item: Zotero.Item): Promise<LocalPDFMatch | null> {
+    const unavailable = new Set<number>();
+    for (;;) {
+      const match = this.find(item, unavailable);
+      if (!match) return null;
+      try {
+        // A stored path may exist in the database before the file is synced.
+        const filePath = await match.attachment.getFilePathAsync();
+        if (filePath) return { ...match, filePath };
+      } catch {
+        // An unreadable attachment should not prevent trying another PDF.
+      }
+      unavailable.add(match.attachment.id);
+    }
+  }
+
+  find(
+    item: Zotero.Item,
+    unavailable = new Set<number>(),
+  ): LocalPDFMatch | null {
     const doi = cleanDOI(item.getField("DOI") || "").toLowerCase();
     const arxivId = extractArxivId(item)?.toLowerCase();
     const title = (item.getField("title") as string) || "";
@@ -118,7 +137,11 @@ export class LocalPDFIndex {
     ] as const) {
       if (!key) continue;
       const hit = (map.get(key) || []).find(
-        (entry) => entry.parent.id !== item.id && entry.filePath,
+        (entry) =>
+          entry.parent.id !== item.id &&
+          entry.parent.libraryID === item.libraryID &&
+          entry.filePath &&
+          !unavailable.has(entry.attachment.id),
       );
       if (hit) {
         return {
@@ -137,16 +160,39 @@ export class LocalPDFIndex {
     const normalized = normalizeTitle(title);
     if (!normalized || normalized.length < 10) return null;
     const candidates: { entry: LocalIndexEntry; score: number }[] = [];
+    const seenOwners = new Set<number>();
+    const year = itemYear(item);
+    const surname = normalizeTitle(itemFirstAuthorSurname(item) ?? "");
     for (const entry of this.entries) {
-      if (entry.parent.id === item.id || !entry.filePath) continue;
-      // A similar title cannot override identifiers that name different works.
+      if (
+        entry.parent.id === item.id ||
+        entry.parent.libraryID !== item.libraryID ||
+        !entry.filePath ||
+        unavailable.has(entry.attachment.id)
+      )
+        continue;
+      // Ambiguity is between works, not between PDFs on the same work.
+      if (seenOwners.has(entry.parent.id)) continue;
+      seenOwners.add(entry.parent.id);
       if (doi && entry.doi && doi !== entry.doi) continue;
       if (arxivId && entry.arxivId && arxivId !== entry.arxivId.toLowerCase()) {
         continue;
       }
       const score = titleSimilarity(title, entry.title);
-      if (score >= TITLE_SIMILARITY_THRESHOLD)
-        candidates.push({ entry, score });
+      if (score < TITLE_SIMILARITY_THRESHOLD) continue;
+      const ownerYear = itemYear(entry.parent);
+      if (
+        year != null &&
+        ownerYear != null &&
+        Math.abs(year - ownerYear) > YEAR_TOLERANCE
+      ) {
+        continue;
+      }
+      const ownerSurname = normalizeTitle(
+        itemFirstAuthorSurname(entry.parent) ?? "",
+      );
+      if (surname && ownerSurname && surname !== ownerSurname) continue;
+      candidates.push({ entry, score });
     }
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => b.score - a.score);
@@ -161,6 +207,22 @@ export class LocalPDFIndex {
       filePath: best.entry.filePath,
     };
   }
+}
+
+// Recognize explicit attachment labels, not arbitrary mentions in paper titles.
+function isSupplement(attachment: Zotero.Item): boolean {
+  const title = String(attachment.getField("title") || "").trim();
+  if (
+    /^(?:supplement(?:ary|al)? (?:material|data|information|appendix|figures?|tables?|files?)s?|supporting (?:information|material)s?|online appendix|补充材料|補充資料)(?:$|[\s:：_-])/i.test(
+      title,
+    )
+  ) {
+    return true;
+  }
+  const filename = attachment.attachmentFilename || "";
+  return /(?:^|[_.-])(?:supplement(?:ary|al)?|supporting[_-]information)(?:[_.-]?(?:material|data|\d+))*\.pdf$/i.test(
+    filename,
+  );
 }
 
 function extractArxivId(item: Zotero.Item): string | undefined {
@@ -179,9 +241,8 @@ function extractArxivId(item: Zotero.Item): string | undefined {
 }
 
 /**
- * Absolute path to an attachment's file, or undefined when it is not on disk.
- * `getFilePath` throws for linked files whose target is missing, so failures
- * degrade to "unusable for linking" rather than aborting the scan.
+ * A stored path hint for matching, not proof of file availability.
+ * The selected attachment is checked asynchronously before reuse.
  */
 function resolveFilePath(attachment: Zotero.Item): string | undefined {
   try {

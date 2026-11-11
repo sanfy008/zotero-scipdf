@@ -1,7 +1,23 @@
 import { LargePrefHelper } from "zotero-plugin-toolkit";
 import { config } from "../../package.json";
 import { getPref } from "../utils/prefs";
-import { CustomResolver, isCustomResolverEqual } from "./CustomResolver";
+import {
+  CustomResolver,
+  isCustomResolverEqual,
+  isSciHubResolver,
+} from "./CustomResolver";
+
+function isResolver(value: unknown): value is CustomResolver {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<CustomResolver>;
+  return (
+    typeof entry.name === "string" &&
+    typeof entry.url === "string" &&
+    (entry.method === "GET" || entry.method === "POST") &&
+    (entry.mode === "html" || entry.mode === "json") &&
+    typeof entry.selector === "string"
+  );
+}
 
 export class CustomResolverManager {
   private static _shared?: CustomResolverManager;
@@ -48,11 +64,19 @@ export class CustomResolverManager {
       }
     }
     const owned = [...previous, ...configured];
-    const preserved = this.customResolversInZotero.filter(
-      (entry) =>
-        !owned.some((resolver) => isCustomResolverEqual(entry, resolver)),
-    );
     const sciHubEnabled = getPref("scihubEnabled") === true;
+    const preserved = this.customResolversInZotero.filter((entry) => {
+      if (owned.some((resolver) => isCustomResolverEqual(entry, resolver))) {
+        return false;
+      }
+      // Disabling Sci-Hub must also silence legacy/renamed Sci-Hub entries
+      // this plugin did not configure. Otherwise Zotero's manual "Find
+      // Available PDF" can still reach a sci-hub.* host.
+      if (!sciHubEnabled && isSciHubResolver(entry)) {
+        return false;
+      }
+      return true;
+    });
     const active = configured.filter(
       (resolver) => resolver.name !== "Sci-Hub" || sciHubEnabled,
     );
@@ -87,11 +111,16 @@ export class CustomResolverManager {
     if (typeof values !== "string") {
       return [];
     }
-    let result = JSON.parse(values);
-    if (!Array.isArray(result)) {
-      result = [result];
+    let result: unknown;
+    try {
+      result = JSON.parse(values);
+    } catch {
+      Zotero.debug(
+        "[Sci-PDF] Ignoring malformed shared PDF resolver preference",
+      );
+      return [];
     }
-    return result as CustomResolver[];
+    return (Array.isArray(result) ? result : [result]).filter(isResolver);
   }
   private set customResolversInZotero(resolvers: CustomResolver[]) {
     Zotero.Prefs.set(

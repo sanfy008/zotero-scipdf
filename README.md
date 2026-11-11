@@ -1,36 +1,19 @@
-# SciPDF For Zotero
+# SciPDF for Zotero
 
-[![zotero target version](https://img.shields.io/badge/Zotero-7+-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
-[![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
+[English](README.md) | [简体中文](doc/README-zhCN.md)
 
-English | [简体中文](doc/README-zhCN.md)
+SciPDF helps Zotero 7–10 find full-text PDFs and fill in missing reference metadata. Install the [latest XPI release](https://github.com/syt2/zotero-scipdf/releases/latest/download/sci-pdf.xpi).
 
+## Use the item context menu
 
-# Introduction
-This plugin helps Zotero find and download full-text PDFs from multiple sources.
-It utilizes Zotero's built-in [PDF resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers) feature, writing resolvers into the `extensions.zotero.findPDFs.resolvers` field so that Zotero's **Find Available PDF** (and automatic download of newly added items) can fetch PDFs.
+- **Fetch PDF** verifies or repairs the DOI when enabled, tries to reuse a PDF already in the library, and searches enabled open-access sources: arXiv, Unpaywall, Semantic Scholar, and OpenAlex. A download is checked for the PDF signature before it is attached, so a login page or an HTML error page is reported as a failed download instead of becoming an attachment. Sci-Hub is an optional fallback, **off by default**. If no PDF can be attached, optional metadata enrichment fills missing fields instead.
+- **Verify & Repair DOI** checks whether the DOI exists and belongs to the selected item. If the DOI is absent or rejected, the plugin looks for a replacement supported by the available title, author, and year evidence. Inconclusive checks leave the DOI unchanged.
+- **Fetch Metadata & Abstract** fills empty fields without overwriting existing values. It can also run DOI repair when that preference is enabled.
 
-Two sources are configured out of the box:
-- **OpenAlex** (enabled by default) — a legal, open-access source. It aggregates OA copies from publishers and repositories and often finds full text (including recent papers) that Sci-Hub does not have. When there is no direct PDF link, it hands Zotero the article's landing page so Zotero's translators can reach the PDF.
-- **Sci-Hub** — a fallback for older paywalled papers. Ships with the reliably-reachable mirrors (`sci-hub.se`, `sci-hub.st`, `sci-hub.ru`).
+Local reuse creates a linked attachment, not a second stored copy. Zotero does not sync linked-file contents, and linked files are not supported in group libraries. Moving or deleting the original file may break the link.
 
-OpenAlex is tried before Sci-Hub. Both can be toggled and configured in the plugin's preferences; you may optionally set a contact email for OpenAlex (recommended, for the API's "polite pool").
+## Zotero's native lookup is separate
 
-**Missing-DOI completion** (enabled by default): when you fetch manually via the right-click menu, an item that has no DOI is looked up on Crossref by its title (corroborated by first author and year). On a confident match the DOI is filled in and the fetch proceeds normally. This runs only on the explicit right-click action — never during background auto-download — and can be turned off in preferences.
+Zotero's **Find Available PDF** and automatic lookup for new items use Zotero's own workflow. SciPDF supplies [custom DOI-based resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers) for enabled OpenAlex and Sci-Hub sources. Native lookup does not run SciPDF's DOI repair, local reuse, or metadata enrichment pipeline.
 
-> [Detail code in Zotero](https://github.com/zotero/zotero/blob/5536f8d2bd08ddac9074b9df05b7d205273835e7/chrome/content/zotero/xpcom/attachments.js#L1350)  
-> [Custom PDF resolvers](https://www.zotero.org/support/kb/custom_pdf_resolvers)  
-> [Zotero Chinese user guide](https://zotero-chinese.com/user-guide/plugins/Zotero-scihub.html#操作步骤)  
-
-# Usage
-Download and install the [latest release xpi file](https://github.com/syt2/zotero-scipdf/releases/latest/download/sci-pdf.xpi).
-
-- For items missing attachments prior to the installation of the plugin, right-click on the item and click on `Find Full Text`.
-- For newly added items with a `DOI`, if the `Automatically download PDFs` option is enabled in the preferences, Zotero will attempt to download the attachments automatically.
-
-### Add/Remove Sci-Hub Sites
-Upon first installation, the plugin will come pre-configured with some common Sci-Hub sites. If you need to add other Sci-Hub sites or remove existing ones, you can edit them in the plugin's settings. Different sites can be separated by commas `,`.
-
-# FAQs
-- Both OpenAlex and Sci-Hub resolvers require a `DOI`: Zotero only runs custom PDF resolvers for items that have a DOI. Items without a DOI can still be tried via Zotero's own resolvers (item URL / Zotero's OA index), but not via these resolvers. When you fetch manually, the missing-DOI completion above can fill in a DOI first so these resolvers become usable.
-- Items that already have associated attachments do not show the `Find Full Text` option; use the plugin's right-click menu to force a fetch.
+In SciPDF preferences, control which sources are used and whether the custom resolvers participate in automatic lookup. Sci-Hub mirror URLs can be edited as a comma-separated list; an empty list sends no mirror requests.

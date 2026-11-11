@@ -77,7 +77,7 @@ export const TITLE_SIMILARITY_THRESHOLD = 0.9;
 // title instead, to keep false positives from slipping through on title alone.
 export const STRICT_TITLE_SIMILARITY_THRESHOLD = 0.97;
 // Published years drift by a year between "online" and "issue" dates.
-const YEAR_TOLERANCE = 1;
+export const YEAR_TOLERANCE = 1;
 
 export function normalizeTitle(title: string): string {
   return title
@@ -88,6 +88,55 @@ export function normalizeTitle(title: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ") // support all Unicode letters and numbers
     .trim()
     .replace(/\s+/g, " ");
+}
+
+// Personal names come from registries with inconsistent diacritics and
+// punctuation ("Assunção" vs "Assuncao", "van der Berg" vs "Van Der Berg").
+export function normalizeName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// The part before a subtitle separator. A plain hyphen inside a compound word
+// ("Agent-based") is not a subtitle separator; an en/em dash or a spaced hyphen
+// is.
+export function mainTitleClause(title: string): string {
+  return title.split(/\s*(?::|：|–|—|\?)\s*|\s+-\s+/)[0].trim();
+}
+
+// Similarity of the main clauses only. An exact short main clause (a paper's
+// acronym, e.g. "SKATER-CON") is strong evidence, so it is not penalized for
+// being shorter than the usual 10-character floor.
+// A Chinese item is often registered under an English title. Comparing the two
+// scripts produces a meaningless low similarity; that is missing evidence, not
+// a contradiction, and must never authorize a rewrite.
+function titleScript(title: string): "cjk" | "latin" | "other" {
+  if (/[぀-ヿ㐀-䶿一-鿿가-힯]/u.test(title)) {
+    return "cjk";
+  }
+  return /[a-z]/iu.test(title) ? "latin" : "other";
+}
+
+export function mainClauseSimilarity(
+  a: string,
+  b: string,
+  fallback = 0,
+): number {
+  const clauseA = mainTitleClause(a);
+  const clauseB = mainTitleClause(b);
+  const normA = normalizeTitle(clauseA);
+  const normB = normalizeTitle(clauseB);
+  if (!normA || !normB) return fallback;
+  if (normA === normB && normA.length >= 4) return 1;
+  if (normA.length >= 10 && normB.length >= 10) {
+    return titleSimilarity(clauseA, clauseB);
+  }
+  return fallback;
 }
 
 function levenshtein(a: string, b: string): number {
@@ -128,7 +177,7 @@ export function titleSimilarity(a: string, b: string): number {
 
 export function candidateSurnames(candidate: CrossrefCandidate): string[] {
   return (candidate.author ?? [])
-    .map((a) => (a.family || a.name || "").toLowerCase().trim())
+    .map((a) => normalizeName(a.family || a.name || ""))
     .filter((s) => s.length > 0);
 }
 
@@ -153,7 +202,7 @@ export function matchCandidateIdentity(
 ): number | null {
   const candidateTitle = candidate.title?.[0];
   if (!candidateTitle) return null;
-  const wantedSurname = query.authorSurname?.toLowerCase().trim() || null;
+  const wantedSurname = normalizeName(query.authorSurname || "") || null;
   let similarity = titleSimilarity(query.title, candidateTitle);
 
   const candYear = candidateYear(candidate);
@@ -172,13 +221,13 @@ export function matchCandidateIdentity(
 
   // Subtitle tolerance requires independent year and author corroboration.
   if (similarity < TITLE_SIMILARITY_THRESHOLD && sameYear && authorMatches) {
-    const queryMain = query.title.split(/[:\-–—?]/)[0].trim();
-    const candMain = candidateTitle.split(/[:\-–—?]/)[0].trim();
-    if (queryMain.length >= 10 && candMain.length >= 10) {
-      const mainSim = titleSimilarity(queryMain, candMain);
-      if (mainSim >= 0.95) {
-        similarity = Math.max(similarity, TITLE_SIMILARITY_THRESHOLD);
-      }
+    const mainSim = mainClauseSimilarity(
+      query.title,
+      candidateTitle,
+      similarity,
+    );
+    if (mainSim >= 0.95) {
+      similarity = Math.max(similarity, TITLE_SIMILARITY_THRESHOLD);
     }
   }
 
@@ -560,20 +609,31 @@ export async function verifyDOI(
   }
 
   const regTitle = metadata.title;
+  const expectedScript = titleScript(expectedTitle);
+  const registeredScript = titleScript(regTitle);
+  if (
+    (expectedScript === "cjk") !== (registeredScript === "cjk") &&
+    expectedScript !== "other" &&
+    registeredScript !== "other"
+  ) {
+    return {
+      status: "unverified",
+      doi: clean,
+      registeredTitle: regTitle,
+      registeredYear: metadata.year,
+      registeredAuthors: metadata.authors,
+      message: `Title is registered in a different language/script; not rewriting: "${regTitle}"`,
+    };
+  }
   const sim = titleSimilarity(expectedTitle, regTitle);
 
   // Subtitle tolerance check
-  const expMain = expectedTitle.split(/[:\-–—?]/)[0].trim();
-  const regMain = regTitle.split(/[:\-–—?]/)[0].trim();
-  const mainSim =
-    expMain.length >= 10 && regMain.length >= 10
-      ? titleSimilarity(expMain, regMain)
-      : sim;
+  const mainSim = mainClauseSimilarity(expectedTitle, regTitle, sim);
   const effectiveSim = Math.max(sim, mainSim >= 0.9 ? 0.9 : 0);
 
   // Known year/author contradictions must be checked before any title or
   // subtitle fast-path, including an exact title match.
-  const wantedSurname = expectedAuthorSurname?.toLowerCase().trim() || null;
+  const wantedSurname = normalizeName(expectedAuthorSurname || "") || null;
   const candYear = metadata.year;
   const yearMatch =
     expectedYear != null && candYear != null
@@ -581,11 +641,13 @@ export async function verifyDOI(
       : true;
   const authorMatch =
     wantedSurname && metadata.authors && metadata.authors.length > 0
-      ? metadata.authors.some(
-          (a) =>
-            a.toLowerCase().includes(wantedSurname) ||
-            wantedSurname.includes(a.toLowerCase()),
-        )
+      ? metadata.authors.some((a) => {
+          const candidate = normalizeName(a);
+          return (
+            candidate.includes(wantedSurname) ||
+            wantedSurname.includes(candidate)
+          );
+        })
       : true;
   const hardContradiction =
     (expectedYear != null && candYear != null && !yearMatch) ||
@@ -1016,17 +1078,21 @@ export async function verifyAndRepairItemDOI(
     } catch {
       // ignore tag failures
     }
-    if (
-      typeof (item as any).hasTag === "function" &&
-      !(item as any).hasTag(verifiedTag)
-    ) {
-      try {
-        item.addTag(verifiedTag, 1);
-        await item.saveTx();
-      } catch {
-        // ignore
+    let tagChanged = false;
+    try {
+      // A valid DOI clears an old negative mark left by an earlier policy.
+      if ((item as any).hasTag?.("_doi_invalid")) {
+        item.removeTag("_doi_invalid");
+        tagChanged = true;
       }
+      if (!(item as any).hasTag?.(verifiedTag)) {
+        item.addTag(verifiedTag, 1);
+        tagChanged = true;
+      }
+    } catch {
+      // ignore tag failures
     }
+    if (tagChanged) await item.saveTx();
     return {
       outcome: "valid",
       oldDOI: currentDOI,
@@ -1050,9 +1116,11 @@ export async function verifyAndRepairItemDOI(
       ? "DOI does not exist (404)"
       : `Mismatched with "${verification.registeredTitle || ""}"`;
 
-  // If item has an arXiv ID, prioritize standard DataCite DOI:
-  if (arxivIds.length > 0) {
-    const arxivDOI = formatArXivDOI(arxivIds[0]);
+  // An arXiv ID extracted from the rejected DOI is not new evidence.
+  const arxivDOI = arxivIds
+    .map(formatArXivDOI)
+    .find((doi) => doi.toLowerCase() !== currentDOI.toLowerCase());
+  if (arxivDOI) {
     item.setField("DOI", arxivDOI);
     recordDOIAudit(item, currentDOI, arxivDOI, mismatchReason);
     await item.saveTx();

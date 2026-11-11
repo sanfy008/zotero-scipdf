@@ -48,6 +48,7 @@ function makeItem({ title = "", doi = "", extra = "", url = "", pdf = null }) {
     isRegularItem: () => true,
     isPDFAttachment: () => Boolean(pdf),
     getField: (f) => fields[f] || "",
+    getCreators: () => [],
     getAttachments: () => (pdf ? [attachmentOf(id).id] : []),
     getFilePath: pdf ? () => pdf : undefined,
     _pdf: pdf,

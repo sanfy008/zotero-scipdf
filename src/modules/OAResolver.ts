@@ -6,6 +6,7 @@
 // indexed by another — so we merge all of them rather than stopping at the first hit.
 import { getPref } from "../utils/prefs";
 import { API_USER_AGENT } from "../utils/constants";
+import { matchDOIs } from "../utils/identifierPatterns";
 import {
   resolveEmail,
   titleSimilarity,
@@ -180,8 +181,41 @@ export function orderCandidates(candidates: OACandidate[]): OACandidate[] {
 export function extractPdfUrlFromHtml(
   html: string,
   baseUrl: string,
+  expectedDOI = "",
 ): string | null {
   if (!html) return null;
+  if (expectedDOI) {
+    const advertised = new Set<string>();
+    const markup = html.replace(
+      /<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
+      "",
+    );
+    for (const [tag] of markup.matchAll(
+      /<meta\b(?:[^'">]|"[^"]*"|'[^']*')*>/gi,
+    )) {
+      const attrs = new Map<string, string>();
+      for (const [, key, doubleQuoted, singleQuoted, unquoted] of tag.matchAll(
+        /\s([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g,
+      )) {
+        attrs.set(key.toLowerCase(), doubleQuoted ?? singleQuoted ?? unquoted);
+      }
+      if (
+        (attrs.get("name") ?? attrs.get("property"))?.toLowerCase() !==
+        "citation_doi"
+      )
+        continue;
+      for (const doi of matchDOIs(attrs.get("content") ?? "")) {
+        advertised.add(doi.toLowerCase());
+      }
+    }
+    // Missing metadata is inconclusive, but a different DOI is a veto.
+    if (
+      advertised.size &&
+      (advertised.size !== 1 || !advertised.has(expectedDOI.toLowerCase()))
+    ) {
+      return null;
+    }
+  }
   const patterns = [
     /<meta[^>]+name=["']citation_pdf_url["'][^>]*content=["']([^"']+)["']/i,
     /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']citation_pdf_url["']/i,

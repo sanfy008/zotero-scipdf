@@ -7,7 +7,9 @@ export class MetadataManager {
   static async enrichItems(items: Zotero.Item[]): Promise<void> {
     const regularItems = items.filter((item) => item.isRegularItem());
     if (regularItems.length === 0) return;
-    await runExclusive(() => this.runEnrich(regularItems));
+    await runExclusive(() => this.runEnrich(regularItems), {
+      label: getString("menuitem-enrichmetadata"),
+    });
   }
 
   private static async runEnrich(regularItems: Zotero.Item[]): Promise<void> {

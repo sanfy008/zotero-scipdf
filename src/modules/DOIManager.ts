@@ -7,7 +7,9 @@ export class DOIManager {
   static async auditAndRepairItems(items: Zotero.Item[]): Promise<void> {
     const regularItems = items.filter((item) => item.isRegularItem());
     if (regularItems.length === 0) return;
-    await runExclusive(() => this.runAudit(regularItems));
+    await runExclusive(() => this.runAudit(regularItems), {
+      label: getString("menuitem-verifydoi"),
+    });
   }
 
   private static async runAudit(regularItems: Zotero.Item[]): Promise<void> {

@@ -18,6 +18,8 @@ function load(imports = {}) {
     ).outputText,
     {
       exports,
+      setTimeout,
+      clearTimeout,
       require(id) {
         assert.ok(Object.hasOwn(imports, id), `Unexpected import: ${id}`);
         return imports[id];
@@ -78,4 +80,100 @@ test("the lock is released when the task throws", async () => {
   });
   assert.equal(ok, true);
   assert.equal(ran, true);
+});
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("the busy notice names the running operation", async () => {
+  notices.length = 0;
+  let release;
+  const first = gate.runExclusive(
+    () =>
+      new Promise((r) => {
+        release = r;
+      }),
+    { label: "Fetch PDF", maxDurationMs: 0 },
+  );
+  await delay(10);
+
+  const refused = await gate.runExclusive(async () => {}, {
+    maxDurationMs: 0,
+  });
+  release();
+  await first;
+
+  assert.equal(refused, false);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].m, "popwin-busy-hint-detail");
+});
+
+test("a stale lock is released by the watchdog", async () => {
+  notices.length = 0;
+  let release;
+  const stuck = gate.runExclusive(
+    () =>
+      new Promise((r) => {
+        release = r;
+      }),
+    { label: "stuck", maxDurationMs: 25 },
+  );
+  await delay(60);
+
+  assert.equal(gate.isPluginBusy(), false, "watchdog should release the lock");
+  assert.ok(
+    notices.some((n) => n.t === "popwin-gate-stale-title"),
+    "the user is told the lock was released",
+  );
+
+  let ran = false;
+  const ok = await gate.runExclusive(
+    async () => {
+      ran = true;
+    },
+    { maxDurationMs: 0 },
+  );
+  assert.equal(ok, true);
+  assert.equal(ran, true);
+
+  release();
+  await stuck;
+  assert.equal(gate.isPluginBusy(), false);
+});
+
+test("a stale task finishing late cannot release a newer lock", async () => {
+  let releaseStale;
+  const stale = gate.runExclusive(
+    () =>
+      new Promise((r) => {
+        releaseStale = r;
+      }),
+    { maxDurationMs: 20 },
+  );
+  await delay(45);
+  assert.equal(gate.isPluginBusy(), false);
+
+  let releaseNew;
+  const fresh = gate.runExclusive(
+    () =>
+      new Promise((r) => {
+        releaseNew = r;
+      }),
+    { maxDurationMs: 0 },
+  );
+  await delay(10);
+  assert.equal(gate.isPluginBusy(), true);
+
+  // The stale task finally settles while the new one holds the lock.
+  releaseStale();
+  await stale;
+  await delay(10);
+  assert.equal(
+    gate.isPluginBusy(),
+    true,
+    "the stale completion must not unlock the newer operation",
+  );
+
+  releaseNew();
+  await fresh;
+  assert.equal(gate.isPluginBusy(), false);
 });
