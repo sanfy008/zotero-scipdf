@@ -81,7 +81,9 @@ function harness({
 } = {}) {
   const calls = [],
     imports = [],
+    fileImports = [],
     links = [],
+    tempFiles = new Map(),
     windows = [];
   const prefs = {
     email: "test@example.invalid",
@@ -129,10 +131,36 @@ function harness({
         imports.push(options.url);
         return { id: nextID++ };
       },
+      importFromFile: async (options) => {
+        fileImports.push({
+          file: options.file,
+          title: options.title,
+          contentType: options.contentType,
+          bytes: tempFiles.get(options.file),
+        });
+        return { id: nextID++ };
+      },
       linkFromFile: async (options) => {
         links.push(options.file);
         return { id: nextID++ };
       },
+    },
+    File: {
+      putContentsAsync: async (path, data) => {
+        tempFiles.set(path, data);
+      },
+    },
+    getTempDirectory: () => {
+      const file = {
+        path: "",
+        append(name) {
+          this.path = `C:/temp/${name}`;
+        },
+        remove() {
+          tempFiles.delete(this.path);
+        },
+      };
+      return file;
     },
   };
   class ProgressWindow {
@@ -207,6 +235,7 @@ function harness({
         addon,
         URL,
         URLSearchParams,
+        Blob: globalThis.Blob,
         setTimeout,
         clearTimeout,
         ztoolkit: { ProgressWindow, log() {} },
@@ -229,6 +258,7 @@ function harness({
     load,
     calls,
     imports,
+    fileImports,
     links,
     windows,
     prefs,

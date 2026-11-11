@@ -382,6 +382,177 @@ test("verifyDOI flags valid DOI when metadata matches title and author", async (
   assert.equal(res.doi, "10.1002/atr.1396");
 });
 
+test("verifyDOI tolerates diacritics, subtitle drops, and short acronyms", async (t) => {
+  const fixtures = [
+    {
+      name: "accented author",
+      title:
+        "Efficient regionalization techniques for socio-economic geographical units",
+      year: 2006,
+      author: "Assuncao",
+      registered: {
+        title: [
+          "Efficient regionalization techniques for socio‐economic geographical units",
+        ],
+        author: [{ family: "AssunÇão" }],
+        issued: { "date-parts": [[2006]] },
+      },
+    },
+    {
+      name: "registered acronym only",
+      title:
+        "SKATER-CON: an efficient algorithm for the spatial regionalization problem",
+      year: 2018,
+      author: "Aydin",
+      registered: {
+        title: ["SKATER-CON"],
+        author: [{ family: "Aydin" }],
+        issued: { "date-parts": [[2018]] },
+      },
+    },
+    {
+      name: "hyphen inside the main clause",
+      title:
+        "Agent-based simulation of urban air mobility: requirements and implementation",
+      year: 2018,
+      author: "Rothfeld",
+      registered: {
+        title: ["Agent-based Simulation of Urban Air Mobility"],
+        author: [{ family: "Rothfeld" }],
+        issued: { "date-parts": [[2018]] },
+      },
+    },
+  ];
+  for (const fixture of fixtures) {
+    await t.test(fixture.name, async () => {
+      const mod = loadModule(
+        `${root}/src/modules/DOICompleter.ts`,
+        {
+          "../utils/identifierPatterns": identifiers,
+          "../utils/utils": { Utils },
+        },
+        {
+          Zotero: {
+            debug: () => {},
+            HTTP: {
+              request: async (method, url) =>
+                url.includes("doiRA")
+                  ? { status: 200, response: [{ RA: "Crossref" }] }
+                  : url.includes("api.crossref.org/works/")
+                    ? { status: 200, response: { message: fixture.registered } }
+                    : { status: 404 },
+            },
+          },
+        },
+      );
+      const result = await mod.verifyDOI(
+        "10.1000/fixture",
+        fixture.title,
+        fixture.year,
+        fixture.author,
+      );
+      assert.equal(result.status, "valid", JSON.stringify(result));
+    });
+  }
+});
+
+test("verifyDOI does not reject a DOI whose title is registered in English", async () => {
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    {
+      Zotero: {
+        debug: () => {},
+        HTTP: {
+          request: async (method, url) =>
+            url.includes("doiRA")
+              ? { status: 200, response: [{ RA: "Crossref" }] }
+              : url.includes("api.crossref.org/works/")
+                ? {
+                    status: 200,
+                    response: {
+                      message: {
+                        title: [
+                          "Urban rail passenger route choice differences",
+                        ],
+                        author: [{ family: "Qin" }],
+                        issued: { "date-parts": [[2025]] },
+                      },
+                    },
+                  }
+                : { status: 404 },
+        },
+      },
+    },
+  );
+  const result = await mod.verifyDOI(
+    "10.16037/j.1007-869x.20241456",
+    "城市轨道交通车站对间的乘客路径选择差异研究",
+    2025,
+    "覃素馨",
+  );
+  assert.equal(result.status, "unverified", JSON.stringify(result));
+});
+
+test("a valid DOI clears a stale invalid mark", async () => {
+  const fields = {
+    title: "The role of loan guarantee schemes",
+    DOI: "10.1016/j.jfs.2009.05.007",
+    date: "2010",
+    extra: "",
+  };
+  const tags = new Set(["_doi_invalid"]);
+  const fakeItem = {
+    isRegularItem: () => true,
+    getDisplayTitle: () => fields.title,
+    getField: (f) => fields[f] || "",
+    setField: (f, v) => (fields[f] = v),
+    getCreators: () => [{ lastName: "Cowling" }],
+    getBestAttachments: async () => [],
+    getTags: () => Array.from(tags, (tag) => ({ tag })),
+    hasTag: (tag) => tags.has(tag),
+    addTag: (tag) => tags.add(tag),
+    removeTag: (tag) => tags.delete(tag),
+    saveTx: async () => {},
+  };
+  const mod = loadModule(
+    `${root}/src/modules/DOICompleter.ts`,
+    {
+      "../utils/identifierPatterns": identifiers,
+      "../utils/utils": { Utils },
+    },
+    {
+      Zotero: {
+        debug: () => {},
+        HTTP: {
+          request: async (method, url) =>
+            url.includes("doiRA")
+              ? { status: 200, response: [{ RA: "Crossref" }] }
+              : url.includes("api.crossref.org/works/")
+                ? {
+                    status: 200,
+                    response: {
+                      message: {
+                        title: ["The role of loan guarantee schemes"],
+                        author: [{ family: "Cowling" }],
+                        issued: { "date-parts": [[2010]] },
+                      },
+                    },
+                  }
+                : { status: 404 },
+        },
+      },
+    },
+  );
+  const report = await mod.verifyAndRepairItemDOI(fakeItem);
+  assert.equal(report.outcome, "valid");
+  assert.equal(tags.has("_doi_invalid"), false);
+  assert.ok(tags.has("_doi_verified:10.1016/j.jfs.2009.05.007"));
+});
+
 test("verifyAndRepairItemDOI corrects a mismatched DOI using OpenAlex and Crossref search", async () => {
   const fields = {
     title: "Street network or functional attractors? Space syntax MCDA",

@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import { config } from "../package.json";
 import { LocalPDFIndex } from "../src/modules/LocalPDFIndex";
+import { Utils } from "../src/utils/utils";
 
 describe("startup", function () {
   it("initializes and registers the item context menu", function () {
@@ -51,6 +52,35 @@ describe("startup", function () {
     } finally {
       file.remove(false);
     }
+  });
+
+  it("imports only bytes that are actually a PDF", async function () {
+    const item = new Zotero.Item("journalArticle");
+    item.setField("title", "SciPDF verified download fixture");
+    await item.saveTx();
+
+    await Utils.attachRemotePDF(
+      new URL(
+        "https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/tracemonkey.pdf",
+      ),
+      item,
+    );
+    const [attachmentID] = item.getAttachments();
+    const attachment = Zotero.Items.get(attachmentID);
+    assert.equal(attachment.attachmentContentType, "application/pdf");
+    const bytes = await Zotero.File.getContentsAsync(
+      await attachment.getFilePathAsync(),
+    );
+    assert.equal(String(bytes).slice(0, 5), "%PDF-");
+
+    let rejected = false;
+    try {
+      await Utils.attachRemotePDF(new URL("https://example.com/"), item);
+    } catch {
+      rejected = true;
+    }
+    assert.isTrue(rejected);
+    assert.lengthOf(item.getAttachments(), 1);
   });
 
   it("registers OpenAlex but no Sci-Hub resolver in a fresh profile", function () {

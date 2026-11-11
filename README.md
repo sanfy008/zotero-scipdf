@@ -6,7 +6,7 @@ SciPDF helps Zotero 7–10 find full-text PDFs and fill in missing reference met
 
 ## Use the item context menu
 
-- **Fetch PDF** verifies or repairs the DOI when enabled, tries to reuse a PDF already in the library, and searches enabled open-access sources: arXiv, Unpaywall, Semantic Scholar, and OpenAlex. Sci-Hub is an optional fallback, **off by default**. If no PDF can be attached, optional metadata enrichment fills missing fields instead.
+- **Fetch PDF** verifies or repairs the DOI when enabled, tries to reuse a PDF already in the library, and searches enabled open-access sources: arXiv, Unpaywall, Semantic Scholar, and OpenAlex. A download is checked for the PDF signature before it is attached, so a login page or an HTML error page is reported as a failed download instead of becoming an attachment. Sci-Hub is an optional fallback, **off by default**. If no PDF can be attached, optional metadata enrichment fills missing fields instead.
 - **Verify & Repair DOI** checks whether the DOI exists and belongs to the selected item. If the DOI is absent or rejected, the plugin looks for a replacement supported by the available title, author, and year evidence. Inconclusive checks leave the DOI unchanged.
 - **Fetch Metadata & Abstract** fills empty fields without overwriting existing values. It can also run DOI repair when that preference is enabled.
 

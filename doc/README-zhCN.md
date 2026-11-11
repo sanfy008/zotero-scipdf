@@ -6,7 +6,7 @@ SciPDF 为 Zotero 7–10 查找全文 PDF，并补齐缺失的文献元数据。
 
 ## 条目右键菜单
 
-- **获取 PDF**：按设置校验或修复 DOI，尝试复用库内 PDF，再查找已启用的开放获取来源（arXiv、Unpaywall、Semantic Scholar、OpenAlex）。Sci-Hub 是可选兜底，**默认关闭**。未能添加 PDF 时，可按设置补齐元数据。
+- **获取 PDF**：按设置校验或修复 DOI，尝试复用库内 PDF，再查找已启用的开放获取来源（arXiv、Unpaywall、Semantic Scholar、OpenAlex）。下载后会先检查 PDF 文件签名，登录页或 HTML 错误页会被判定为下载失败，而不是被当成 PDF 附件。Sci-Hub 是可选兜底，**默认关闭**。未能添加 PDF 时，可按设置补齐元数据。
 - **校验并修复 DOI**：检查 DOI 是否存在、是否属于当前条目。缺失或明确不匹配时，结合可用的标题、作者和年份寻找替代 DOI。无法确定时保留原值。
 - **补齐元数据与摘要**：仅补写空字段，不覆盖已有内容。若已开启 DOI 修复，也会先校验 DOI。
 

@@ -349,17 +349,21 @@ test("an item without identifiers can fetch an arXiv PDF by title without writin
       scihubEnabled: false,
     },
     request: async (_method, url) => {
-      assert.ok(url.startsWith("https://export.arxiv.org/api/query?"));
-      return {
-        status: 200,
-        response: `<feed><entry><id>http://arxiv.org/abs/2401.12345</id><title>${TITLE}</title><link title="pdf" href="https://arxiv.org/pdf/2401.12345" /></entry></feed>`,
-      };
+      if (url.startsWith("https://export.arxiv.org/api/query?")) {
+        return {
+          status: 200,
+          response: `<feed><entry><id>http://arxiv.org/abs/2401.12345</id><title>${TITLE}</title><link title="pdf" href="https://arxiv.org/pdf/2401.12345" /></entry></feed>`,
+        };
+      }
+      return { status: 200, responseText: "%PDF-1.4\n%%EOF" };
     },
   });
   await h
     .load("src/modules/SciHubFetcher.ts")
     .SciHubFetcher.updateItems([target], false);
-  assert.deepEqual(h.imports, ["https://arxiv.org/pdf/2401.12345.pdf"]);
+  assert.equal(h.fileImports.length, 1);
+  assert.match(h.fileImports[0].file, /\.pdf$/);
+  assert.equal(h.fileImports[0].contentType, "application/pdf");
   assert.equal(target.fields.DOI, "");
 });
 
@@ -425,8 +429,40 @@ test("a PDF URL reported first as a landing page is still attached directly", as
   await h
     .load("src/modules/SciHubFetcher.ts")
     .SciHubFetcher.updateItems([target], false);
-  assert.deepEqual(h.imports, [pdf]);
-  assert.ok(!h.calls.includes(pdf), "do not scrape the PDF as HTML");
+  assert.equal(h.fileImports.length, 1);
+  assert.equal(h.fileImports[0].contentType, "application/pdf");
+  assert.equal(h.calls.filter((url) => url === pdf).length, 1);
+});
+
+test("an HTML error page served for a PDF URL is not attached as success", async () => {
+  const pdf = "https://repo.invalid/paper.pdf";
+  const target = makeItem({ DOI: GOOD_DOI });
+  const h = harness({
+    preferences: {
+      completeDOI: false,
+      unpaywall: true,
+      semanticScholar: false,
+      openAlex: false,
+      scihubEnabled: false,
+    },
+    request: async (_method, url) => {
+      if (url.includes("api.unpaywall.org")) {
+        return {
+          status: 200,
+          response: { best_oa_location: { url_for_pdf: pdf } },
+        };
+      }
+      return {
+        status: 200,
+        responseText: "<html><body>Sign in to continue</body></html>",
+      };
+    },
+  });
+  await h
+    .load("src/modules/SciHubFetcher.ts")
+    .SciHubFetcher.updateItems([target], false);
+  assert.equal(h.fileImports.length, 0);
+  assert.equal(h.windows.at(-1).title, "popwin-fetchfailed");
 });
 
 test("URL deduplication normalizes host case but preserves case-sensitive paths", () => {

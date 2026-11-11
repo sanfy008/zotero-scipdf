@@ -354,7 +354,7 @@ export class SciHubFetcher {
           pdfUrl = extractPdfUrlFromHtml(page.html, page.url, expectedDOI);
         }
         if (!pdfUrl) continue;
-        await Utils.attachRemotePDF(new URL(pdfUrl), item);
+        await Utils.attachRemotePDF(new URL(pdfUrl), item, state);
         if (state.cancelled) return false;
         return true;
       } catch (error) {
@@ -609,7 +609,7 @@ export class SciHubFetcher {
       if (pdfUrl.protocol === "http:" || !pdfUrl.protocol) {
         pdfUrl.protocol = "https:";
       }
-      await Utils.attachRemotePDF(pdfUrl, item);
+      await Utils.attachRemotePDF(pdfUrl, item, state);
     } else if (this.pdfNotAvailable(body)) {
       ztoolkit.log(`scihub: PDF is not available at the moment "${scihubUrl}"`);
       throw new PDFNotFoundError(`PDF is not available: ${scihubUrl}`);
