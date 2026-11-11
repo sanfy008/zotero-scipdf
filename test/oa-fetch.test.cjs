@@ -30,6 +30,7 @@ const doiPolicy = load("../src/modules/DOICompleter.ts", {
 });
 // Use the real landing-page extractor so the flow test exercises it end to end.
 const realOA = load("../src/modules/OAResolver.ts", {
+  "../utils/identifierPatterns": identifiers,
   "../utils/prefs": { getPref: () => undefined },
   "./DOICompleter": {
     titleSimilarity: () => 1,
@@ -49,6 +50,7 @@ const item = (doi = "10.1002/atr.1396") => ({
 function harness({
   candidates = [],
   landingHtml = {},
+  redirects = {},
   attachFails = false,
   scihubEnabled = false,
 } = {}) {
@@ -132,6 +134,7 @@ function harness({
               status: html === undefined ? 404 : 200,
               statusText: String(html === undefined ? 404 : 200),
               responseText: html || "",
+              responseURL: redirects[url],
             };
           },
         },
@@ -172,6 +175,40 @@ test("a landing candidate is scraped for citation_pdf_url, then attached", async
   assert.deepEqual(h.calls, [landing]);
   assert.deepEqual(h.imports, ["https://journal.example/pdf/1.pdf"]);
   assert.equal(h.windows.at(-1).title, "popwin-fetchsuccess");
+});
+
+test("a contradictory citation DOI skips the landing page and tries the next source", async () => {
+  const wrong = "https://journal.example/article/wrong";
+  const right = "https://repo.example/article/right";
+  const h = harness({
+    candidates: [wrong, right].map((url) => ({
+      url,
+      kind: "landing",
+      source: "OpenAlex",
+    })),
+    landingHtml: {
+      [wrong]: `<meta content='https://doi.org/10.1002/other' name='CITATION_DOI'>
+        <meta name="citation_pdf_url" content="/wrong.pdf">`,
+      [right]: `<meta name="citation_doi" content="10.1002/ATR.1396">
+        <meta name="citation_pdf_url" content="/right.pdf">`,
+    },
+  });
+  await h.run([item()]);
+  assert.deepEqual(h.calls, [wrong, right]);
+  assert.deepEqual(h.imports, ["https://repo.example/right.pdf"]);
+});
+
+test("relative PDF links use the final landing URL after redirect", async () => {
+  const landing = "https://doi.example/resolve";
+  const h = harness({
+    candidates: [{ url: landing, kind: "landing", source: "OpenAlex" }],
+    redirects: { [landing]: "https://journal.example/articles/record" },
+    landingHtml: {
+      [landing]: '<meta name="citation_pdf_url" content="paper.pdf">',
+    },
+  });
+  await h.run([item()]);
+  assert.deepEqual(h.imports, ["https://journal.example/articles/paper.pdf"]);
 });
 
 test("no OA candidates with Sci-Hub off reports PDF not available", async () => {

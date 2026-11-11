@@ -123,6 +123,85 @@ test("enrichment never queries a DOI explicitly rejected by verification", async
   }
 });
 
+test("a rejected arXiv DOI cannot repair itself or supply an OA PDF", async () => {
+  const doi = "10.48550/arXiv.1706.03762";
+  const target = makeItem({ DOI: doi });
+  const h = harness({
+    preferences: { arxiv: true },
+    request: async (_method, url) =>
+      url.includes("doiRA/")
+        ? { status: 200, response: [{ status: "DOI does not exist" }] }
+        : { status: 404 },
+  });
+  const { verifyAndRepairItemDOI, isDOIRejected } = h.load(
+    "src/modules/DOICompleter.ts",
+  );
+  const report = await verifyAndRepairItemDOI(target);
+  assert.equal(isDOIRejected(report), true);
+  assert.equal(target.fields.DOI, doi);
+  assert.equal(target.hasTag("_doi_repaired"), false);
+  await h
+    .load("src/modules/SciHubFetcher.ts")
+    .SciHubFetcher.updateItems([target]);
+  assert.deepEqual(h.imports, []);
+  assert.ok(!h.calls.some((url) => url.includes("/pdf/1706.03762")));
+});
+
+test("local title fallback rejects contradictory evidence", async (t) => {
+  for (const [date, author] of [
+    ["2010", "Wang"],
+    ["2024", "Smith"],
+  ]) {
+    await t.test(`${date} ${author}`, async () => {
+      const owner = makeItem({ date }, author);
+      const target = makeItem();
+      const h = harness({ items: [owner, target], pdfs: [makePDF(owner)] });
+      const index = await h
+        .load("src/modules/LocalPDFIndex.ts")
+        .LocalPDFIndex.build(1);
+      assert.equal(index.find(target), null);
+    });
+  }
+});
+
+test("two PDFs on one owner do not make the title match ambiguous", async () => {
+  const owner = makeItem();
+  const target = makeItem();
+  const h = harness({
+    items: [owner, target],
+    pdfs: [makePDF(owner), makePDF(owner)],
+  });
+  const index = await h
+    .load("src/modules/LocalPDFIndex.ts")
+    .LocalPDFIndex.build(1);
+  assert.equal(index.find(target)?.parent.id, owner.id);
+});
+
+test("local reuse skips supplements and unavailable files before linking a main PDF", async () => {
+  const owner = makeItem({ DOI: GOOD_DOI });
+  const target = makeItem({ DOI: GOOD_DOI });
+  const main = makePDF(owner);
+  const supplement = makePDF(owner, { title: "Supplementary material" });
+  const appendix = makePDF(owner, { filename: "article_supplement_1.pdf" });
+  const missing = makePDF(owner, { available: false });
+  owner.attachmentIDs = [supplement.id, appendix.id, missing.id, main.id];
+  const h = harness({
+    preferences: {
+      completeDOI: false,
+      reuseLocalPDF: true,
+      openAlex: false,
+      scihubEnabled: false,
+    },
+    items: [owner, target],
+    pdfs: [main, supplement, appendix, missing],
+  });
+  await h
+    .load("src/modules/SciHubFetcher.ts")
+    .SciHubFetcher.updateItems([target], false);
+  assert.deepEqual(h.links, [main.getFilePath()]);
+  assert.deepEqual(h.calls, []);
+});
+
 test("metadata title lookup rejects conflicting author or year", async (t) => {
   for (const [name, year, author] of [
     ["year", 2010, "Jane Wang"],

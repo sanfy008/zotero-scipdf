@@ -189,6 +189,40 @@ test("restart removes owned Sci-Hub resolvers when disabled without touching thi
   );
 });
 
+test("startup recovers from malformed shared resolver preferences", async (t) => {
+  const { oa, independent } = resolverFixtures(harness());
+  for (const [raw, preserved] of [
+    ["{", []],
+    ["null", []],
+    [JSON.stringify(independent), [independent]],
+    [JSON.stringify([null, 42, {}, independent]), [independent]],
+  ]) {
+    await t.test(raw, async () => {
+      const h = harness({
+        realResolvers: true,
+        preferences: { firstInstall: true, scihubEnabled: false },
+        configuredResolvers: [oa],
+      });
+      h.Zotero.Prefs.set("extensions.zotero.findPDFs.resolvers", raw);
+      await h.load("src/hooks.ts").default.onStartup();
+      assert.equal(h.addon.data.initialized, true);
+      assert.deepEqual(h.installedResolvers(), j([...preserved, oa]));
+    });
+  }
+});
+
+test("manual PDF lookup sends no mirror requests when no mirrors are configured", async () => {
+  const target = makeItem({ DOI: GOOD_DOI });
+  const h = harness({
+    configuredResolvers: [],
+    preferences: { completeDOI: false, openAlex: false, scihubEnabled: true },
+  });
+  await h
+    .load("src/modules/SciHubFetcher.ts")
+    .SciHubFetcher.updateItems([target]);
+  assert.deepEqual(h.calls, []);
+});
+
 test("disabling Sci-Hub removes legacy Sci-Hub resolvers it never configured", async () => {
   const { oa, sci, independent } = resolverFixtures(harness());
   const legacyWf = {

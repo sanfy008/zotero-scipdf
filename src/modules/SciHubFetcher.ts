@@ -6,6 +6,7 @@ import {
   resolveEmail,
   verifyAndRepairItemDOI,
   isDOIRejected,
+  formatArXivDOI,
   type DOIRepairReport,
 } from "./DOICompleter";
 import { enrichSingleItem } from "./MetadataEnricher";
@@ -111,7 +112,12 @@ export class SciHubFetcher {
       }
 
       const dois = doiRejected ? [] : await Utils.extractDOIs(item);
-      const arxivIds = await Utils.extractArXivIDs(item);
+      const rejectedDOI = doiRejected
+        ? doiReport?.oldDOI?.toLowerCase()
+        : undefined;
+      const arxivIds = (await Utils.extractArXivIDs(item)).filter(
+        (id) => formatArXivDOI(id).toLowerCase() !== rejectedDOI,
+      );
       const itemTitle = item.getField("title") || "";
       // Without any identifier, an arXiv title search and the metadata fallback
       // can still help; only a title-less item has nothing to work with.
@@ -166,7 +172,13 @@ export class SciHubFetcher {
           }
           oaHadCandidates = candidates.length > 0;
           if (!state.cancelled) {
-            success = await this.tryOACandidates(candidates, item, state, win);
+            success = await this.tryOACandidates(
+              candidates,
+              targetDoi,
+              item,
+              state,
+              win,
+            );
           }
         }
 
@@ -251,8 +263,8 @@ export class SciHubFetcher {
     state: FetchState,
   ): Promise<boolean> {
     if (state.cancelled) return false;
-    const match = index.find(item);
-    if (!match?.filePath) return false;
+    const match = await index.findAvailable(item);
+    if (state.cancelled || !match?.filePath) return false;
     const linked = await Utils.linkExistingPDF(item, match.filePath);
     if (!linked) return false;
     Utils.showPopWin(
@@ -321,6 +333,7 @@ export class SciHubFetcher {
   // `citation_pdf_url` first.
   private static async tryOACandidates(
     candidates: OACandidate[],
+    expectedDOI: string,
     item: Zotero.Item,
     state: FetchState,
     win: ReturnType<typeof Utils.showPopWin>,
@@ -336,9 +349,9 @@ export class SciHubFetcher {
       try {
         let pdfUrl: string | null = candidate.url;
         if (candidate.kind === "landing") {
-          const html = await this.fetchText(candidate.url, state);
+          const page = await this.fetchText(candidate.url, state);
           if (state.cancelled) return false;
-          pdfUrl = extractPdfUrlFromHtml(html, candidate.url);
+          pdfUrl = extractPdfUrlFromHtml(page.html, page.url, expectedDOI);
         }
         if (!pdfUrl) continue;
         await Utils.attachRemotePDF(new URL(pdfUrl), item);
@@ -359,7 +372,7 @@ export class SciHubFetcher {
   private static async fetchText(
     url: string,
     state: FetchState,
-  ): Promise<string> {
+  ): Promise<{ html: string; url: string }> {
     const xhr = await Zotero.HTTP.request("GET", url, {
       responseType: "text",
       timeout: 15000,
@@ -377,7 +390,7 @@ export class SciHubFetcher {
         status: xhr.status,
       });
     }
-    return (xhr.responseText as string) || "";
+    return { html: xhr.responseText || "", url: xhr.responseURL || url };
   }
 
   // Iterates the configured Sci-Hub mirrors for one item, scraping each for the
@@ -469,9 +482,6 @@ export class SciHubFetcher {
     const sciHubResolvers = CustomResolverManager.shared.customResolvers.filter(
       (r) => r.name === "Sci-Hub",
     );
-    if (sciHubResolvers.length <= 0) {
-      return ["https://sci-hub.se/"];
-    }
     return sciHubResolvers.map((r) => {
       // resolver.url is like "https://sci-hub.se/{doi}", extract the base
       return r.url.replace(/\{doi\}.*$/, "");

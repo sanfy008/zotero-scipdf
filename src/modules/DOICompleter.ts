@@ -77,7 +77,7 @@ export const TITLE_SIMILARITY_THRESHOLD = 0.9;
 // title instead, to keep false positives from slipping through on title alone.
 export const STRICT_TITLE_SIMILARITY_THRESHOLD = 0.97;
 // Published years drift by a year between "online" and "issue" dates.
-const YEAR_TOLERANCE = 1;
+export const YEAR_TOLERANCE = 1;
 
 export function normalizeTitle(title: string): string {
   return title
@@ -1050,9 +1050,11 @@ export async function verifyAndRepairItemDOI(
       ? "DOI does not exist (404)"
       : `Mismatched with "${verification.registeredTitle || ""}"`;
 
-  // If item has an arXiv ID, prioritize standard DataCite DOI:
-  if (arxivIds.length > 0) {
-    const arxivDOI = formatArXivDOI(arxivIds[0]);
+  // An arXiv ID extracted from the rejected DOI is not new evidence.
+  const arxivDOI = arxivIds
+    .map(formatArXivDOI)
+    .find((doi) => doi.toLowerCase() !== currentDOI.toLowerCase());
+  if (arxivDOI) {
     item.setField("DOI", arxivDOI);
     recordDOIAudit(item, currentDOI, arxivDOI, mismatchReason);
     await item.saveTx();

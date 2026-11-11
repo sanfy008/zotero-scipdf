@@ -7,6 +7,18 @@ import {
   isSciHubResolver,
 } from "./CustomResolver";
 
+function isResolver(value: unknown): value is CustomResolver {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Partial<CustomResolver>;
+  return (
+    typeof entry.name === "string" &&
+    typeof entry.url === "string" &&
+    (entry.method === "GET" || entry.method === "POST") &&
+    (entry.mode === "html" || entry.mode === "json") &&
+    typeof entry.selector === "string"
+  );
+}
+
 export class CustomResolverManager {
   private static _shared?: CustomResolverManager;
   private static zoteroCustomResolversPrefKey: Readonly<string> =
@@ -99,11 +111,16 @@ export class CustomResolverManager {
     if (typeof values !== "string") {
       return [];
     }
-    let result = JSON.parse(values);
-    if (!Array.isArray(result)) {
-      result = [result];
+    let result: unknown;
+    try {
+      result = JSON.parse(values);
+    } catch {
+      Zotero.debug(
+        "[Sci-PDF] Ignoring malformed shared PDF resolver preference",
+      );
+      return [];
     }
-    return result as CustomResolver[];
+    return (Array.isArray(result) ? result : [result]).filter(isResolver);
   }
   private set customResolversInZotero(resolvers: CustomResolver[]) {
     Zotero.Prefs.set(

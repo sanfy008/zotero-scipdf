@@ -51,12 +51,17 @@ function makeItem(fields = {}, surname = "Wang") {
   return item;
 }
 
-function makePDF(parent) {
+function makePDF(parent, { title = "", filename = "", available = true } = {}) {
+  const id = nextID++;
+  const path = `C:/library/${parent.id}/${id}.pdf`;
   const attachment = {
-    id: nextID++,
+    id,
     deleted: false,
+    attachmentFilename: filename,
+    getField: (field) => (field === "title" ? title : ""),
     isPDFAttachment: () => true,
-    getFilePath: () => `C:/library/${parent.id}.pdf`,
+    getFilePath: () => path,
+    getFilePathAsync: async () => available && path,
   };
   parent.attachmentIDs.push(attachment.id);
   return attachment;
